@@ -6,7 +6,7 @@ MODULE_DIR	 = /lib/modules/$(KVERSION)
 MODULE_NAME  = spi-ch341-usb
 obj-m       := $(MODULE_NAME).o   
 
-$(MODULE_NAME).ko:
+$(MODULE_NAME).ko: $(MODULE_NAME).c
 	make -C $(KERNEL_DIR) M=$(PWD) modules
 
 all:
