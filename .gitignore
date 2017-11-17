@@ -7,4 +7,5 @@
 *.o
 *.order
 *.ko
-
+.temp_versions
+*.cmd
