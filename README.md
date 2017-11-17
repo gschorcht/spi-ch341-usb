@@ -39,7 +39,7 @@ Once the driver is loaded successfully, it provides three SPI devices on next av
 /dev/spidev0.2
 ```
 
-These devices can be used with normal I/O operations like open, read, write and close to communicate with one of the slaves connected to the SPI. 
+These devices can be used with normal I/O operations like open, ioctl and close to communicate with one of the slaves connected to the SPI. 
 
 ## Installation
 
