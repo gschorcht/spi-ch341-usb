@@ -15,6 +15,11 @@
  */
 // #define DEBUG
 
+#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
+#error The driver requires at least kernel version 3.10
+#else
+
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/module.h>
@@ -219,7 +224,6 @@ static int ch341_bitbang (struct ch341_device* ch341_dev,
     return 0;
 }
 
-
 static int ch341_transfer_one(struct spi_master *master,
                               struct spi_device *spi, 
                               struct spi_transfer* t)
@@ -357,8 +361,8 @@ static int ch341_spi_probe (struct usb_interface* usb_if,
     master->bus_num = bus;
     master->num_chipselect = CH341_SPI_NUM_DEVICES;
     master->mode_bits = SPI_MODE_3 | SPI_LSB_FIRST;
-    master->bits_per_word_mask = SPI_BIT_MASK(8);
     master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
+    master->bits_per_word_mask = SPI_BIT_MASK(8);
     master->transfer_one = ch341_transfer_one;
     master->max_speed_hz = CH341_SPI_MAX_FREQ;
     master->min_speed_hz = CH341_SPI_MIN_FREQ;
@@ -433,3 +437,6 @@ MODULE_ALIAS("spi:ch341");
 MODULE_AUTHOR("Gunar Schorcht <gunar@schorcht.net>");
 MODULE_DESCRIPTION("spi-ch341-usb driver v0.2");
 MODULE_LICENSE("GPL");
+
+#endif // LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
+
