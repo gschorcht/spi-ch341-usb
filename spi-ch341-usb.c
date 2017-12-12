@@ -1,5 +1,5 @@
 /*
- * Driver for the CH341 USB-SPI/I2C adapter
+ * Driver for the CH341 USB to SPI and GPIO adapter
  *
  * Copyright (c) 2017 Gunar Schorcht (gunar@schorcht.net)
  *

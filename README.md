@@ -61,7 +61,7 @@ Five of the data pins can be configured as GPIO pins if they are not used for th
 **Please note:** 
 - Direction of pins that are configured as input or output can be changed during runtime.
 - Pin 21 (D6/IN2) can be configured only as input. It's direction can't be changed during runtime.
-- At least one of the CS data pins D0~D2 has to be configured as CS signal.
+- At least one of the CS data pins D0...D2 has to be configured as CS signal.
 - One of the inputs can be configured to generate **hardware interrupts for rising edges** of signals. For that purpose, the pin has to connected with the CH341A **INT** pin 7. 
 
 
@@ -136,7 +136,7 @@ struct ch341_pin_config ch341_board_config[CH341_GPIO_NUM_PINS] =
 
 **Please note:** 
 - Pin 21 (D6/IN2) can be configured only as input.
-- At least one of the CS signal pins 15~17 (D0~D2) has to be configured as CS signal.
+- At least one of the CS signal pins 15...17 (D0...D2) has to be configured as CS signal.
 - Hardware interrupts can be generated only for rising edges of signals.
 - Only one of the input pins can be configured to generate hardware interrupts.
 - The signal at the input pin that is configured to generate hardware interrupts (```hwirq``` set to 1) **MUST** be also be connected to the CH341A **INT** pin 7.
