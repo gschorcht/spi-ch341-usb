@@ -1,7 +1,7 @@
 PWD         := $(shell pwd) 
 KVERSION    := $(shell uname -r)
 KERNEL_DIR   = /usr/src/linux-headers-$(KVERSION)/
-MODULE_DIR	 = /lib/modules/$(KVERSION)
+MODULE_DIR   = /lib/modules/$(KVERSION)
 
 MODULE_NAME  = spi-ch341-usb
 obj-m       := $(MODULE_NAME).o   
@@ -14,6 +14,7 @@ all:
 
 clean:
 	make -C $(KERNEL_DIR) M=$(PWD) clean
+	rm -f gpio_input gpio_output
 
 install: $(MODULE_NAME).ko
 	cp $(MODULE_NAME).ko $(MODULE_DIR)/kernel/drivers/spi
