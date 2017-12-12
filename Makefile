@@ -14,7 +14,7 @@ all:
 
 clean:
 	make -C $(KERNEL_DIR) M=$(PWD) clean
-	rm -f gpio_input gpio_output
+	rm -f examples/gpio_input examples/gpio_output
 
 install: $(MODULE_NAME).ko
 	cp $(MODULE_NAME).ko $(MODULE_DIR)/kernel/drivers/spi
