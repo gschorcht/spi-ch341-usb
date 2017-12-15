@@ -151,7 +151,6 @@ struct ch341_device
     uint8_t in_buf  [CH341_USB_MAX_BULK_SIZE]; // usb input buffer
     uint8_t out_buf [CH341_USB_MAX_BULK_SIZE]; // usb outpu buffer
     uint8_t intr_buf[CH341_USB_MAX_INTR_SIZE]; // usb interrupt buffer
-    uint8_t poll_buf[2];                       // usb buffer for polling urb
     
     struct urb* intr_urb;
 
@@ -1164,10 +1163,11 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
     DEV_DBG (CH341_IF_ADDR, "registered GPIOs from %d to %d", 
              gpio->base, gpio->base + gpio->ngpio - 1);
 
-    for (i = 0; i < CH341_GPIO_NUM_PINS; i++)
+    for (i = 0; i < ch341_dev->gpio_num; i++)
+        // in case the pin is not a CS signal, it is an GPIO pin
         if (ch341_board_config[i].mode != CH341_PIN_MODE_CS)
         {
-            // in case the pin as CS signal, it is an GPIO pin
+            // add and export the GPIO pin
             if ((result = gpio_request(gpio->base + j, ch341_board_config[i].name)) ||
                 (result = gpio_export (gpio->base + j, ch341_board_config[i].pin != 21 ? true : false)))
             {
@@ -1389,7 +1389,7 @@ module_usb_driver(ch341_usb_driver);
 
 MODULE_ALIAS("spi:ch341");
 MODULE_AUTHOR("Gunar Schorcht <gunar@schorcht.net>");
-MODULE_DESCRIPTION("spi-ch341-usb driver v0.3");
+MODULE_DESCRIPTION("spi-ch341-usb driver v1.0.0");
 MODULE_LICENSE("GPL");
 
 #endif // LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
