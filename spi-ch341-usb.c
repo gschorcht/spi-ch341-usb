@@ -796,8 +796,9 @@ static int ch341_irq_probe (struct ch341_device* ch341_dev)
         ch341_dev->irq_descs[i]   = irq_to_desc(ch341_dev->irq_base + i);
         ch341_dev->irq_enabled[i] = false;
         
-        irq_set_chip      (ch341_dev->irq_base + i, &ch341_dev->irq);
-        irq_set_chip_data (ch341_dev->irq_base + i, ch341_dev);
+        irq_set_chip          (ch341_dev->irq_base + i, &ch341_dev->irq);
+        irq_set_chip_data     (ch341_dev->irq_base + i, ch341_dev);
+        irq_clear_status_flags(ch341_dev->irq_base + i, IRQ_NOREQUEST | IRQ_NOPROBE);
     }
     
     DEV_DBG (CH341_IF_ADDR, "done");
