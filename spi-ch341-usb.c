@@ -18,7 +18,7 @@
 
 // uncomment following line to activate kernel debug handling
 // #define DEBUG
-// #define DEBUG_PRINTK
+   #define DEBUG_PRINTK
 
 #ifdef DEBUG_PRINTK
 #define PRINTK(fmt,...) printk("%s: "fmt"\n", __func__, ##__VA_ARGS__)
@@ -181,6 +181,12 @@ struct ch341_device
     int               irq_gpio_map [CH341_GPIO_NUM_PINS]; // IRQ to GPIO pin map (irq_num elements)
     int               irq_hw;                             // IRQ for GPIO with hardware IRQ (default -1)
 };
+
+// ----- variables configurable during runtime ---------------------------
+
+static uint poll_period = CH341_POLL_PERIOD_MS;       // module parameter poll period
+
+// ----- function prototypes ---------------------------------------------
 
 static int ch341_usb_transfer (struct ch341_device *dev, int out_len, int in_len);
 
@@ -868,20 +874,28 @@ static int ch341_gpio_poll_function (void* argument)
         jiffies_ms = jiffies_to_msecs(jiffies);
         drift_ms   = jiffies_ms - next_poll_ms;
         
+        if (poll_period == 0)
+        {
+            poll_period = CH341_POLL_PERIOD_MS;
+            DEV_ERR (CH341_IF_ADDR,
+                     "Poll period 0 ms is invalid, set back to the default of %d ms",
+                     CH341_POLL_PERIOD_MS);
+        }
+
         if (drift_ms < 0)
         {
             // period was to short, increase corr_ms by 1 ms
             // DEV_DBG (CH341_IF_ADDR, "polling GPIO is %u ms too early", -drift_ms); 
             corr_ms = (corr_ms > 0) ? corr_ms - 1 : 0;
         }   
-        else if (drift_ms > 0 && drift_ms < CH341_POLL_PERIOD_MS)
+        else if (drift_ms > 0 && drift_ms < poll_period)
         {
             // period was to long, decrease corr_ms by 1 ms
             // DEV_DBG (CH341_IF_ADDR, "polling GPIO is %u ms too late", drift_ms); 
-            corr_ms = (corr_ms < CH341_POLL_PERIOD_MS) ? corr_ms + 1 : 0;
+            corr_ms = (corr_ms < poll_period) ? corr_ms + 1 : 0;
         }
 
-        next_poll_ms = jiffies_ms + CH341_POLL_PERIOD_MS;
+        next_poll_ms = jiffies_ms + poll_period;
 
         // DEV_DBG (CH341_IF_ADDR, "read CH341 GPIOs");
         ch341_gpio_read_inputs (ch341_dev);
@@ -1032,7 +1046,7 @@ int ch341_gpio_get_direction (struct gpio_chip *chip, unsigned offset)
 
     mode = (ch341_dev->gpio_pins[offset]->mode == CH341_PIN_MODE_IN) ? 1 : 0;
 
-    DEV_DBG (CH341_IF_ADDR, "%d %d", offset, mode);
+    DEV_DBG (CH341_IF_ADDR, "gpio=%d dir=%d", offset, mode);
 
     return mode;
 }
@@ -1100,7 +1114,7 @@ int ch341_gpio_to_irq (struct gpio_chip *chip, unsigned offset)
     irq = ch341_dev->gpio_irq_map[offset];
     irq = (irq >= 0 ? ch341_dev->irq_base + irq : 0);
 
-    DEV_DBG (CH341_IF_ADDR, "%d %d", offset, irq);
+    DEV_DBG (CH341_IF_ADDR, "gpio=%d irq=%d", offset, irq);
 
     return irq;
 }
@@ -1163,7 +1177,7 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
     DEV_DBG (CH341_IF_ADDR, "registered GPIOs from %d to %d", 
              gpio->base, gpio->base + gpio->ngpio - 1);
 
-    for (i = 0; i < ch341_dev->gpio_num; i++)
+    for (i = 0; i < CH341_GPIO_NUM_PINS; i++)
         // in case the pin is not a CS signal, it is an GPIO pin
         if (ch341_board_config[i].mode != CH341_PIN_MODE_CS)
         {
@@ -1263,7 +1277,7 @@ static void ch341_usb_complete_intr_urb (struct urb *urb)
     if (!urb->status)
     {
         // hardware IRQs are only generated for one IRQ and rising edges 0 -> 1
-        // DEV_DBG (CH341_IF_ADDR, "%d", urb->status);
+        DEV_DBG (CH341_IF_ADDR, "%d", urb->status);
 
         // because of asynchronous GPIO read, the GPIO value has to be set to 1
         ch341_dev->gpio_io_data |= ch341_dev->gpio_bits[ch341_dev->irq_gpio_map[ch341_dev->irq_hw]];
@@ -1325,7 +1339,7 @@ static int ch341_usb_probe (struct usb_interface* usb_if,
     {
         epd = &settings->endpoint[i].desc;
 
-        DEV_DBG (CH341_IF_ADDR, "i=%d type=%d dir=%d addr=%0x", i, 
+        DEV_DBG (CH341_IF_ADDR, "  endpoint=%d type=%d dir=%d addr=%0x", i, 
                  usb_endpoint_type(epd), usb_endpoint_dir_in(epd), 
                  usb_endpoint_num(epd));
 
@@ -1391,6 +1405,9 @@ MODULE_ALIAS("spi:ch341");
 MODULE_AUTHOR("Gunar Schorcht <gunar@schorcht.net>");
 MODULE_DESCRIPTION("spi-ch341-usb driver v1.0.0");
 MODULE_LICENSE("GPL");
+
+module_param(poll_period, uint, 0644);
+MODULE_PARM_DESC(poll_period, "GPIO polling period in ms (default 10 ms)");
 
 #endif // LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
 

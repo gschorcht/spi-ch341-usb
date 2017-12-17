@@ -127,6 +127,79 @@ rmmod spi-ch341-usb
 
 before you can load the driver module for the I2C interface.
 
+## Configuration of the driver
+
+Per default, the driver configures the GPIOs as following and polls the inputs with a default rate of 100 Hz and 10 ms period, respectively.
+
+| Pin | SPI Function | GPIO function | GPIO name | IRQ      |
+| --- | ------------ | --------------|---------- | ---------|
+| 15  | CS0          | -             | -         | -        |
+| 16  | CS1          | -             | -         | -        |
+| 17  | CS2          | -             | -         | -        |
+| 19  | -            | Input         | gpio4     | hardware |
+| 21  | -            | Input         | gpio5     | software |
+
+GPIO configuration as well their polling rate can be changed according to your requirements. The direction of GPIO pins configured as inputs or outputs can be changed during runtime.
+
+### GPIO configuration
+
+To change **GPIO configuration**, simply change the variable ```ch341_board_config``` that should be self-explaining. This variable contains structured entries for each configurable pin. Each entry consists of the pin number, the GPIO mode used for the pin, the name used for the GPIO in the Linux host and a flag whether the pin is connected with the CH341A hardware interrupt pin **INT**. Default configuration is:
+
+```
+struct ch341_pin_config ch341_board_config[CH341_GPIO_NUM_PINS] = 
+{
+    // pin  GPIO mode           GPIO name   hwirq
+    {   15, CH341_PIN_MODE_CS , "cs0"     , 0 }, // used as CS0
+    {   16, CH341_PIN_MODE_CS , "cs1"     , 0 }, // used as CS1
+    {   17, CH341_PIN_MODE_CS , "cs2"     , 0 }, // used as CS2
+    {   19, CH341_PIN_MODE_IN , "gpio4"   , 1 }, // used as input with hardware IRQ
+    {   21, CH341_PIN_MODE_IN , "gpio5"   , 0 }  // used as input
+};
+```
+In this configuration, pins 15 to 17 are used as CS signals while pin 19 and 21 are used as inputs. Additionally, pin 19 is connected with the CH341A hardware interrupt pin **INT** that produces hardware interrupts on rising edge of the signal connected to pin 19.
+
+To define a pin as output, simply change the GPIO mode to ```CH341_PIN_MODE_OUT```. For example, if you would like to configure only one CS signal and the other CS signal pins as GPIO outputs, the configuration could look like the following:
+
+```
+struct ch341_pin_config ch341_board_config[CH341_GPIO_NUM_PINS] = 
+{
+    // pin  GPIO mode           GPIO name   hwirq
+    {   15, CH341_PIN_MODE_CS , "cs0"     , 0 }, // used as CS0
+    {   16, CH341_PIN_MODE_OUT, "gpio2"   , 0 }, // used as output
+    {   17, CH341_PIN_MODE_OUT, "gpio3"   , 0 }, // used as output
+    {   19, CH341_PIN_MODE_IN , "gpio4"   , 1 }, // used as input with hardware IRQ
+    {   21, CH341_PIN_MODE_IN , "gpio5"   , 0 }  // used as input
+};
+```
+
+**Please note:** 
+- Pin 21 can only be configured as input. It's direction can't be changed during runtime.
+- At least one of the CS signal pins 15...17 (D0...D2) has to be configured as CS signal.
+- Hardware interrupts can only be generated for rising edges of signals.
+- Only one of the input pins can be configured to generate hardware interrupts (```hwirq``` set to 1).
+- The signal at the input pin that is configured to generate hardware interrupts (```hwirq``` set to 1) **MUST** also be connected to the CH341A **INT** pin 7.
+- If ther is no input should generate hardware interrupts, set ```hwirq``` to 0 for all entries.
+
+### GPIO polling rate
+
+GPIO inputs are polled periodically by a separate kernel thread. GPIO polling rate defines the **rate at which the kernel thread reads GPIO inputs** and determines whether to generate **software interrupts**. That is, it defines the maximum rate at which changes at GPIO inputs can be recognized and software interrupts can be generated. 
+
+The GPIO polling rate is defined by its period in milliseconds using the constant ```CH341_POLL_PERIOD_MS```. The period must be at least 10 ms, but should be 20 ms or more if possible dependent on the performance of your system. Please check your ```syslog``` for messages like ```"GPIO poll period is too short by at least %n msecs"```. This message is thrown if the defined ```CH341_POLL_PERIOD_MS``` is shorter than the time required for one reading of the GPIOs. 
+
+The higher GPIO polling rate is, the higher is the system usage by the kernel thread. On the other hand, the probability that short interrupt events will be lost grows, the lower the GPIO polling rate becomes.
+
+GPIO polling rate can also be changed using the **module parameter** ```poll_rate``` either when loading the module, e.g.,
+
+```
+sudo modprobe spi_ch341_usb poll_rate=50
+```
+or as real ```root``` during runtime using sysfs, e.g.,
+```
+echo 50 > /sys/module/spi_ch341_usb/parameters/poll_period
+```
+
+**Please note:** Since the CH341A hardware interrupt signal **INT** uses a separate USB endpoint, the maximum rate of hardware interrupts is independent on the GPIO polling rate and can reach up to 400 Hz.
+
 
 ## Usage from user space
 
@@ -192,7 +265,7 @@ is created by the system, where ```<gpio>``` is the name of the GPIO as defined 
 
 **Please note:** For read and write operations from and/or to these files, the user requires read and/or write permissions, respectively.
 
-**_Open a GPIO_**
+#### Open a GPIO
 
 Before a GPIO can be used, file ```value``` has to be opened
 
@@ -207,7 +280,7 @@ if ((fd = open("/sys/class/gpio/<gpio>/value", O_RDWR)) == -1)
 ```
 where ```<gpio>``` is again the name of the GPIO.
 
-**_Write GPIO output_**
+#### Write GPIO output
 
 Once the file ```value``` is opened, you can use standard I/O functions to read and write. To write a GPIO value, simply use function ```write``` as following. The value is written to the GPIO out immediately.
 
@@ -219,7 +292,7 @@ if (write(fd, value ? "1" : "0", 1) == -1)
 }
 ```
 
-**_Read GPIO input_**
+#### Read GPIO input
 
 To read values from GPIOs immediately, you can simply use function ```read``` as following:
 
@@ -242,7 +315,7 @@ if (lseek(fd, 0, SEEK_SET) == -1) {
 }
 ```
 
-**_Reacting on GPIO input interrupt_**
+#### Reacting on GPIO input interrupt
 
 Function ```poll``` can be used before function ```read``` to react and read values from the GPIO only on interrupts.
 
@@ -281,7 +354,7 @@ Even though the driver defines software interrupts for GPIO inputs as well as GP
 
 Full examples for GPIO output and interrupt input can be found in the driver's directory.
 
-**_Change the GPIO direction_**
+#### Change the GPIO direction
 
 To change the direction of a GPIO pin configured as input or output, simply write as ```root``` keyword ```in``` or keyword ```out``` to the file ```direction```, e.g.
 
