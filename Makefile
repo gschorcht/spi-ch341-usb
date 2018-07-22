@@ -4,7 +4,7 @@ MODULE_VERSION=1.0.0
 DKMS       := $(shell which dkms)
 PWD        := $(shell pwd) 
 KVERSION   := $(shell uname -r)
-KERNEL_DIR  = /usr/src/linux-headers-$(KVERSION)/
+KERNEL_DIR  = /lib/modules/$(KVERSION)/build
 MODULE_DIR  = /lib/modules/$(KVERSION)
 
 ifneq ($(DKMS),)
