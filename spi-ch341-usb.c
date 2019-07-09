@@ -382,13 +382,13 @@ static uint8_t ch341_spi_swap_byte(const uint8_t byte)
 
 static const int cs_bits[CH341_SPI_MAX_NUM_DEVICES] = { 0x01, 0x02, 0x04 };
 
-static int ch341_spi_set_cs (struct spi_device *spi, bool active)
+static void ch341_spi_set_cs (struct spi_device *spi, bool active)
 {
     struct ch341_device* ch341_dev;
     int result;
-    
-    CHECK_PARAM_RET (spi, -EINVAL);
-    CHECK_PARAM_RET (ch341_dev = ch341_spi_maser_to_dev(spi->master), -EINVAL);
+
+    CHECK_PARAM (spi);
+    CHECK_PARAM (ch341_dev = ch341_spi_maser_to_dev(spi->master));
 
     // DEV_DBG (CH341_IF_ADDR, "active %s", active ? "true" : "false");
 
@@ -396,13 +396,13 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
     {
         DEV_ERR (CH341_IF_ADDR, "invalid CS value %d, 0~%d are available", 
                  spi->chip_select, CH341_SPI_MAX_NUM_DEVICES-1);
-        return -EINVAL;
+        return;
     }
-    
+
     if (active)
-        ch341_dev->gpio_io_data &= ~cs_bits[spi->chip_select];
-    else
         ch341_dev->gpio_io_data |= cs_bits[spi->chip_select];
+    else
+        ch341_dev->gpio_io_data &= ~cs_bits[spi->chip_select];
 
     ch341_dev->out_buf[0]  = CH341_CMD_UIO_STREAM;
     ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | ch341_dev->gpio_mask;
@@ -410,8 +410,6 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
     ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
     result = ch341_usb_transfer(ch341_dev, 4, 0);
-        
-    return (result < 0) ? result : CH341_OK;
 }
 
 // Implementation of bit banging protocol uses following IOs to be compatible
@@ -554,20 +552,13 @@ static int ch341_spi_transfer_one(struct spi_master *master,
         lsb = spi->mode & SPI_LSB_FIRST;
         tx  = t->tx_buf;
         rx  = t->rx_buf;
-    
-        // activate cs
-        ch341_spi_set_cs (spi, true);
 
         // fill output buffer with command and output data, controller expects lsb first
         ch341_dev->out_buf[0] = CH341_CMD_SPI_STREAM;
         for (i = 0; i < t->len; i++)
             ch341_dev->out_buf[i+1] = lsb ? tx[i] : ch341_spi_swap_byte(tx[i]);
-
         // transfer output and input data
         result = ch341_usb_transfer(ch341_dev, t->len + 1, t->len);
-
-        // deactivate cs
-        ch341_spi_set_cs (spi, false);
 
         // fill input data with input buffer, controller delivers lsb first
         if (result >= 0 && rx)
@@ -591,7 +582,7 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     int i;
 
     CHECK_PARAM_RET (ch341_dev, -EINVAL);
-    
+
     DEV_DBG (CH341_IF_ADDR, "start");
 
     // search for next free bus number
@@ -609,7 +600,7 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
         DEV_ERR (CH341_IF_ADDR, "SPI master allocation failed");
         return -ENOMEM;
     }
-    
+
     // save the pointer to ch341_dev in the SPI master device data field
     ch341_spi_maser_to_dev (ch341_dev->master) = ch341_dev;
 
@@ -622,6 +613,7 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     ch341_dev->master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
     ch341_dev->master->bits_per_word_mask = SPI_BIT_MASK(8);
     ch341_dev->master->transfer_one = ch341_spi_transfer_one;
+    ch341_dev->master->set_cs = ch341_spi_set_cs;
     ch341_dev->master->max_speed_hz = CH341_SPI_MAX_FREQ;
     ch341_dev->master->min_speed_hz = CH341_SPI_MIN_FREQ;
 
