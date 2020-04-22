@@ -567,7 +567,8 @@ static int ch341_spi_transfer_one(struct spi_master *master,
         result = ch341_usb_transfer(ch341_dev, t->len + 1, t->len);
 
         // deactivate cs
-        ch341_spi_set_cs (spi, false);
+        if (t->cs_change)
+            ch341_spi_set_cs (spi, false);
 
         // fill input data with input buffer, controller delivers lsb first
         if (result >= 0 && rx)
@@ -620,7 +621,11 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     ch341_dev->master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
     ch341_dev->master->mode_bits = SPI_MODE_3 | SPI_LSB_FIRST;
     ch341_dev->master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(5,0,0)
     ch341_dev->master->bits_per_word_mask = SPI_BIT_MASK(8);
+#else
+    ch341_dev->master->bits_per_word_mask = SPI_BPW_MASK(8);
+#endif
     ch341_dev->master->transfer_one = ch341_spi_transfer_one;
     ch341_dev->master->max_speed_hz = CH341_SPI_MAX_FREQ;
     ch341_dev->master->min_speed_hz = CH341_SPI_MIN_FREQ;
