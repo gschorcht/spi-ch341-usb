@@ -63,7 +63,7 @@
   * msecs". This message is thrown if the defined CH341_POLL_PERIOD_MS is
   * shorter than the time required for one reading of the GPIOs. 
   */
-#define CH341_POLL_PERIOD_MS        10    // see above
+#define CH341_POLL_PERIOD_MS        100    // see above
 
 #define CH341_GPIO_NUM_PINS         5     // Number of GPIO pins, DO NOT CHANGE
 
@@ -1130,7 +1130,7 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
 {
     struct gpio_chip *gpio = &ch341_dev->gpio;
     int result;
-    int i, j = 0;
+    // int i, j = 0;
 
     CHECK_PARAM_RET (ch341_dev, -EINVAL);
     
@@ -1415,11 +1415,11 @@ module_usb_driver(ch341_usb_driver);
 
 MODULE_ALIAS("spi:ch341");
 MODULE_AUTHOR("Gunar Schorcht <gunar@schorcht.net>");
-MODULE_DESCRIPTION("spi-ch341-usb driver v1.0.0");
+MODULE_DESCRIPTION("spi-ch341-usb driver v1.0.1");
 MODULE_LICENSE("GPL");
 
 module_param(poll_period, uint, 0644);
-MODULE_PARM_DESC(poll_period, "GPIO polling period in ms (default 10 ms)");
+MODULE_PARM_DESC(poll_period, "GPIO polling period in ms (default 100 ms)");
 
 #endif // LINUX_VERSION_CODE < KERNEL_VERSION(3,10,0)
 
