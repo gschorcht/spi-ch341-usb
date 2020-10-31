@@ -1183,6 +1183,11 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
     DEV_DBG (CH341_IF_ADDR, "registered GPIOs from %d to %d", 
              gpio->base, gpio->base + gpio->ngpio - 1);
 
+#if 0
+    // @geeksville comment: It seems this code breaks usage on (newer?) kernels.  With kernel 5.8.0
+    // any attempts to set gpio status results in EBUSY error getting returned because it thinks some
+    // other driver (the ch341 driver) already owns this GPIO exclusively.
+
     for (i = 0; i < CH341_GPIO_NUM_PINS; i++)
         // in case the pin is not a CS signal, it is an GPIO pin
         if (ch341_board_config[i].mode != CH341_PIN_MODE_CS)
@@ -1199,6 +1204,7 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
             }
             j++;
         }
+#endif
 
     ch341_dev->gpio_thread = kthread_run (&ch341_gpio_poll_function, ch341_dev, "spi-ch341-usb-poll");
 
