@@ -1242,6 +1242,7 @@ static void ch341_gpio_remove (struct ch341_device* ch341_dev)
 
 static const struct usb_device_id ch341_usb_table[] = {
     { USB_DEVICE(0x1a86, 0x5512) },
+    { USB_DEVICE(0x1a86, 0x5523) },
     { }
 };
 
