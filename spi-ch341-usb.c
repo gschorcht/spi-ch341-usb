@@ -17,7 +17,7 @@
  */
 
 // uncomment following line to activate kernel debug handling
-// #define DEBUG
+#define DEBUG
    #define DEBUG_PRINTK
 
 #ifdef DEBUG_PRINTK
@@ -64,8 +64,6 @@
   * shorter than the time required for one reading of the GPIOs. 
   */
 #define CH341_POLL_PERIOD_MS        100    // see above
-
-#define CH341_GPIO_NUM_PINS         5     // Number of GPIO pins, DO NOT CHANGE
 
 #define CH341_USB_MAX_BULK_SIZE     32    // CH341A wMaxPacketSize for ep_02 and ep_82
 #define CH341_USB_MAX_INTR_SIZE     8     // CH341A wMaxPacketSize for ep_81
@@ -116,7 +114,7 @@ struct ch341_pin_config {
     bool    hwirq;  // connected to hardware interrupt (only one pin can have true)
 };
  
-struct ch341_pin_config ch341_board_config[CH341_GPIO_NUM_PINS] = 
+struct ch341_pin_config ch341_board_config[] =
 {
     // pin  GPIO mode           GPIO name   hwirq
     {   15, CH341_PIN_MODE_CS , "cs0"     , 0 }, // used as CS0
@@ -125,6 +123,8 @@ struct ch341_pin_config ch341_board_config[CH341_GPIO_NUM_PINS] =
     {   19, CH341_PIN_MODE_IN , "gpio4"   , 1 }, // used as input with hardware IRQ
     {   21, CH341_PIN_MODE_IN , "gpio5"   , 0 }  // used as input
 };
+
+#define CH341_GPIO_NUM_PINS (sizeof(ch341_board_config) / sizeof(ch341_board_config[0]))
 
 static struct spi_board_info ch341_spi_devices[CH341_SPI_MAX_NUM_DEVICES];
 
@@ -410,7 +410,7 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
     ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
     result = ch341_usb_transfer(ch341_dev, 4, 0);
-        
+
     return (result < 0) ? result : CH341_OK;
 }
 
@@ -1242,7 +1242,6 @@ static void ch341_gpio_remove (struct ch341_device* ch341_dev)
 
 static const struct usb_device_id ch341_usb_table[] = {
     { USB_DEVICE(0x1a86, 0x5512) },
-    { USB_DEVICE(0x1a86, 0x5523) },
     { }
 };
 
@@ -1261,8 +1260,10 @@ static int ch341_usb_transfer(struct ch341_device *ch341_dev, int out_len, int i
                                           usb_endpoint_num(ch341_dev->ep_out)),
                           ch341_dev->out_buf, out_len, 
                           &actual, 2000);
-    if (retval < 0)
+    if (retval < 0) { // -110 means timed out
+        DEV_ERR (CH341_IF_ADDR, "usb_bulk write failed %d", retval);
         return retval;
+    }
 
     if (in_len == 0)
         return actual;
@@ -1274,8 +1275,10 @@ static int ch341_usb_transfer(struct ch341_device *ch341_dev, int out_len, int i
                           ch341_dev->in_buf, CH341_USB_MAX_BULK_SIZE, 
                           &actual, 2000);
 
-    if (retval < 0)
+    if (retval < 0) {
+        DEV_ERR (CH341_IF_ADDR, "usb_bulk read failed %d", retval);
         return retval;
+    }
 
     return actual;
 }
@@ -1335,7 +1338,7 @@ static int ch341_usb_probe (struct usb_interface* usb_if,
     // create and initialize a new device data structure
     if (!(ch341_dev = kzalloc(sizeof(struct ch341_device), GFP_KERNEL)))
     {
-        DEV_ERR (&usb_if->dev, "could not allocate device memor");
+        DEV_ERR (&usb_if->dev, "could not allocate device memory");
         usb_put_dev (ch341_dev->usb_dev);
         return -ENOMEM;
     } 
@@ -1403,11 +1406,16 @@ static void ch341_usb_disconnect(struct usb_interface *usb_if)
     ch341_usb_free_device (ch341_dev);
 }
 
+/* static int ch341_usb_suspend(struct usb_interface *intf, pm_message_t message) {
+    return -1; // Disable USB suspend
+} */
+
 static struct usb_driver ch341_usb_driver = {
     .name       = "spi-ch341-usb",
     .id_table   = ch341_usb_table,
     .probe      = ch341_usb_probe,
     .disconnect = ch341_usb_disconnect
+    // .suspend    = ch341_usb_suspend
 };
 
 module_usb_driver(ch341_usb_driver);
