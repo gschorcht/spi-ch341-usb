@@ -564,7 +564,8 @@ static int ch341_spi_transfer_one(struct spi_master *master,
             ch341_dev->out_buf[i+1] = lsb ? tx[i] : ch341_spi_swap_byte(tx[i]);
 
         // transfer output and input data
-        result = ch341_usb_transfer(ch341_dev, t->len + 1, t->len);
+        if(t->len)
+            result = ch341_usb_transfer(ch341_dev, t->len + 1, t->len);
 
         // deactivate cs
         if (t->cs_change)
