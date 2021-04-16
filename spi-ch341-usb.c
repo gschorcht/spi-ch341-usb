@@ -175,7 +175,9 @@ struct ch341_device
     struct irq_chip   irq;                                // chip descriptor for IRQs
     uint8_t           irq_num;                            // number of pins with IRQs
     int               irq_base;                           // base IRQ allocated
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,3,0)
     struct irq_desc * irq_descs    [CH341_GPIO_NUM_PINS]; // IRQ descriptors used (irq_num elements)
+#endif
     int               irq_types    [CH341_GPIO_NUM_PINS]; // IRQ types (irq_num elements)
     bool              irq_enabled  [CH341_GPIO_NUM_PINS]; // IRQ enabled flag (irq_num elements)
     int               irq_gpio_map [CH341_GPIO_NUM_PINS]; // IRQ to GPIO pin map (irq_num elements)
@@ -757,12 +759,13 @@ static int ch341_irq_check (struct ch341_device* ch341_dev, uint8_t irq,
     if ((type & IRQ_TYPE_EDGE_FALLING && old > new) ||
         (type & IRQ_TYPE_EDGE_RISING  && new > old))
     {
-        // DEV_DBG (CH341_IF_ADDR, "%s irq=%d %d %s", 
-        //          hardware ? "hardware" : "software", 
-        //          irq, type, (old > new) ? "falling" : "rising");
+        DEV_DBG (CH341_IF_ADDR, "%s irq=%d %d %s", 
+                  hardware ? "hardware" : "software", 
+                  irq, type, (old > new) ? "falling" : "rising");
 
         #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
-		handle_simple_irq (ch341_dev->irq_descs[irq]);
+		// handle_simple_irq (ch341_dev->irq_descs[irq]);
+        handle_nested_irq(ch341_dev->irq_base+irq);
         #else
 		handle_simple_irq (ch341_dev->irq_base+irq, ch341_dev->irq_descs[irq]);
         #endif
@@ -799,7 +802,9 @@ static int ch341_irq_probe (struct ch341_device* ch341_dev)
 
     for (i = 0; i < ch341_dev->irq_num; i++)
     {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,3,0)
         ch341_dev->irq_descs[i]   = irq_to_desc(ch341_dev->irq_base + i);
+#endif
         ch341_dev->irq_enabled[i] = false;
         
         irq_set_chip          (ch341_dev->irq_base + i, &ch341_dev->irq);
