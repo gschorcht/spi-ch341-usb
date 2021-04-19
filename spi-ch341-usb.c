@@ -110,17 +110,18 @@
 struct ch341_pin_config {
     uint8_t pin;    // pin number of CH341 chip
     uint8_t mode;   // GPIO mode
-    char*   name;   // GPIO name
+    const char* name;   // GPIO name
     bool    hwirq;  // connected to hardware interrupt (only one pin can have true)
 };
  
 struct ch341_pin_config ch341_board_config[] =
 {
     // pin  GPIO mode           GPIO name   hwirq
-    {   15, CH341_PIN_MODE_CS , "cs0"     , 0 }, // used as CS0
-    {   16, CH341_PIN_MODE_CS , "cs1"     , 0 }, // used as CS1
-    {   17, CH341_PIN_MODE_CS , "cs2"     , 0 }, // used as CS2
-    {   19, CH341_PIN_MODE_IN , "gpio4"   , 1 }, // used as input with hardware IRQ
+    {   15, CH341_PIN_MODE_CS , "cs"      , 0 }, // used as CS0
+    {   16, CH341_PIN_MODE_IN , "int"     , 1 }, // For now I'm using names appropriate for the Pine64 SX1262 LoRa board
+    {   17, CH341_PIN_MODE_IN , "busy"    , 0 }, 
+    // pin 18 supposedly has fixed configuration for SPI?  
+    {   19, CH341_PIN_MODE_IN , "gpio4"   , 0 }, // used as input with hardware IRQ
     {   21, CH341_PIN_MODE_IN , "gpio5"   , 0 }  // used as input
 };
 
@@ -168,7 +169,7 @@ struct ch341_device
     struct ch341_pin_config* gpio_pins   [CH341_GPIO_NUM_PINS]; // pin configurations (gpio_num elements)
     uint8_t                  gpio_bits   [CH341_GPIO_NUM_PINS]; // bit of I/O data byte (gpio_num elements)
     uint8_t                  gpio_values [CH341_GPIO_NUM_PINS]; // current values (gpio_num elements)
-    char*                    gpio_names  [CH341_GPIO_NUM_PINS]; // pin names  (gpio_num elements)
+    const char*              gpio_names  [CH341_GPIO_NUM_PINS]; // pin names  (gpio_num elements)
     int                      gpio_irq_map[CH341_GPIO_NUM_PINS]; // GPIO to IRQ map (gpio_num elements)
     
     // IRQ device description
@@ -392,7 +393,7 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
     CHECK_PARAM_RET (spi, -EINVAL);
     CHECK_PARAM_RET (ch341_dev = ch341_spi_maser_to_dev(spi->master), -EINVAL);
 
-    // DEV_DBG (CH341_IF_ADDR, "active %s", active ? "true" : "false");
+    DEV_DBG (CH341_IF_ADDR, "active %s", active ? "true" : "false");
 
     if (spi->chip_select > CH341_SPI_MAX_NUM_DEVICES)
     {
@@ -525,7 +526,14 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
     return 0;
 }
 
-static int ch341_spi_transfer_one(struct spi_master *master,
+static void ch341_set_cs(struct spi_device *spi, bool enable) {
+    struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->master);
+
+    // DEV_DBG (CH341_IF_ADDR, "cs=%d", enable);    
+    ch341_spi_set_cs (spi, enable);
+}
+
+static int ch341_spi_transfer_low(struct spi_master *master,
                                   struct spi_device *spi, 
                                   struct spi_transfer* t)
 {
@@ -537,14 +545,12 @@ static int ch341_spi_transfer_one(struct spi_master *master,
     int i;
 
     CHECK_PARAM_RET (ch341_dev, EIO);
-    CHECK_PARAM_RET (master   , EIO)
-    CHECK_PARAM_RET (spi      , EIO)
+    CHECK_PARAM_RET (master   , EIO);
+    CHECK_PARAM_RET (spi      , EIO);
     CHECK_PARAM_RET (t        , EIO); 
     CHECK_PARAM_RET (t->len <= CH341_USB_MAX_BULK_SIZE, EIO);
-    
-    // DEV_DBG (CH341_IF_ADDR, "");
 
-    mutex_lock (&ch341_lock);
+    // DEV_DBG (CH341_IF_ADDR, "");
 
     // use slow bitbang implementation for SPI_MODE_1, SPI_MODE_2 and SPI_MODE_3
     if (spi->mode & SPI_MODE_3)
@@ -557,7 +563,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
         tx  = t->tx_buf;
         rx  = t->rx_buf;
     
-        // activate cs
+        // activate cs (always)
         ch341_spi_set_cs (spi, true);
 
         // fill output buffer with command and output data, controller expects lsb first
@@ -570,7 +576,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
             result = ch341_usb_transfer(ch341_dev, t->len + 1, t->len);
 
         // deactivate cs
-        if (t->cs_change)
+        if (t->cs_change) // we must be running on an older kernel, newer kernels would have called set_cs instead
             ch341_spi_set_cs (spi, false);
 
         // fill input data with input buffer, controller delivers lsb first
@@ -580,11 +586,64 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
     }
 
+    DEV_DBG (CH341_IF_ADDR, "len=%u, csChange=%d, result=%d", t->len, t->cs_change, result);
+
+    return result;
+}
+
+static int ch341_spi_transfer_one(struct spi_master *master,
+                                  struct spi_device *spi, 
+                                  struct spi_transfer* t)
+{
+    int result;
+
+    // DEV_DBG (CH341_IF_ADDR, "");
+
+    mutex_lock (&ch341_lock);
+
+    result = ch341_spi_transfer_low(master, spi, t);
+
     spi_finalize_current_transfer(master);
 
     mutex_unlock (&ch341_lock);
 
     return result;
+}
+
+/*
+ * spi_transfer_one_message - Workaround for cs deassertion (IMO bug) in recent kernels (aprox >=5.10)
+ * replace the kernel version with our impl
+ */
+static int spi_transfer_one_message(struct spi_master *master,
+				    struct spi_message *msg)
+{
+    struct spi_device *spi = msg->spi;
+    struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(master);
+
+	struct spi_transfer *xfer;
+	int ret = 0;
+
+    mutex_lock (&ch341_lock);
+	ch341_set_cs(msg->spi, true);
+
+    msg->actual_length = 0;
+	list_for_each_entry(xfer, &msg->transfers, transfer_list) {
+
+        ret = ch341_spi_transfer_low(master, spi, xfer);
+
+		msg->actual_length += xfer->len;
+	}
+
+	msg->status = ret;
+
+	spi_finalize_current_message(master);
+    mutex_unlock (&ch341_lock);
+
+    if(ret > 0) // transfer_one_message does not want a count as a result, just 0 for success
+        ret = 0;
+
+    // DEV_DBG (CH341_IF_ADDR, "ret=%d", ret);
+	return ret;
 }
 
 
@@ -629,7 +688,9 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
 #else
     ch341_dev->master->bits_per_word_mask = SPI_BPW_MASK(8);
 #endif
-    ch341_dev->master->transfer_one = ch341_spi_transfer_one;
+    // ch341_dev->master->transfer_one = ch341_spi_transfer_one;
+    ch341_dev->master->transfer_one_message = spi_transfer_one_message;
+    ch341_dev->master->set_cs = ch341_set_cs;
     ch341_dev->master->max_speed_hz = CH341_SPI_MAX_FREQ;
     ch341_dev->master->min_speed_hz = CH341_SPI_MIN_FREQ;
 
