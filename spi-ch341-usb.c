@@ -68,6 +68,7 @@
 #define CH341_USB_MAX_BULK_SIZE     32    // CH341A wMaxPacketSize for ep_02 and ep_82
 #define CH341_USB_MAX_INTR_SIZE     8     // CH341A wMaxPacketSize for ep_81
 
+#define CH341_CMD_GET_STATUS        0xA0  // See ch341_spi_get_status
 #define CH341_CMD_SPI_STREAM        0xA8  // SPI command
 #define CH341_CMD_UIO_STREAM        0xAB  // UIO command
 
@@ -104,25 +105,57 @@
  *  - Pin 19 (D4/DOUT2) as input/output    (CH341_PIN_MODE_IN/CH341_PIN_MODE_OUT)
  *  - Pin 21 (D6/DIN2 ) as input           (CH341_PIN_MODE_IN)
  *
- *  Pins 18, 20, 22 have fix configuraton and are used as SPI signals.
+ *  Pins 18 (sck), 20 (mosi), 22 (miso) have fix configuraton and are used as SPI signals.
+ * 
+ *  Note: To keep compatibility with the original version of this driver, I'm still tracking "pin numbers" in the 
+ *  board_config.  But usually it is more meaningful to use the following bit numbers in the gpio_io_data work:
+ * 
+ *  bit 0-7 CH341  D7-D0,
+ bit 8 对应 CH341 的 ERR#引脚, (pin 5)
+ bit 9 对应 CH341 的 PEMP 引脚, (pin 6)
+ bit 10 对应 CH341 的 INT#引脚, (pin 26)
+ bit 11 对应 CH341 的 SLCT 引脚, (pin 8)
+ bit 13 对应 CH341 的 BUSY/WAIT#引脚, (pin 27)
+ bit 14 对应 CH341 的 AUTOFD#/DATAS#引脚, (pin 4)
+ bit 15 对应 CH341 的 SLCTIN#/ADDRS#引脚, (pin 3)
+ bit 23 对应 CH341 的 SDA 引脚 (pin 23)
  */
 
 struct ch341_pin_config {
-    uint8_t pin;    // pin number of CH341 chip
+    uint8_t bitNum;    // pin number of CH341 chip
     uint8_t mode;   // GPIO mode
     const char* name;   // GPIO name
     bool    hwirq;  // connected to hardware interrupt (only one pin can have true)
 };
- 
+
+// Which bitnums can change direction
+#define CH341_DIR_OK_MASK       0x0037
+
+// Which bitnums can be set as outputs
+#define CH341_OUTPUT_OK_MASK    0x0017
+
+// Which bitnums can be used as a chip select
+#define CH341_CS_OK_MASK        0x0007
+
 struct ch341_pin_config ch341_board_config[] =
 {
-    // pin  GPIO mode           GPIO name   hwirq
-    {   15, CH341_PIN_MODE_CS , "cs"      , 0 }, // used as CS0
-    {   16, CH341_PIN_MODE_IN , "int"     , 1 }, // For now I'm using names appropriate for the Pine64 SX1262 LoRa board
-    {   17, CH341_PIN_MODE_IN , "busy"    , 0 }, 
-    // pin 18 supposedly has fixed configuration for SPI?  
-    {   19, CH341_PIN_MODE_IN , "gpio4"   , 0 }, // used as input with hardware IRQ
-    {   21, CH341_PIN_MODE_IN , "gpio5"   , 0 }  // used as input
+    // bitnum  GPIO mode           GPIO name   hwirq
+    {   0, CH341_PIN_MODE_CS , "cs0"     , 0 }, // used as a chip select by default
+    {   1, CH341_PIN_MODE_CS , "cs1"     , 0 }, // used as a chip select by default
+    {   2, CH341_PIN_MODE_CS , "cs2"     , 0 }, // used as a chip select by default
+    {   3, CH341_PIN_MODE_IN , "sck"     , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+    {   4, CH341_PIN_MODE_IN , "gpio4"   , 0 }, // used as input with hardware IRQ
+    {   5, CH341_PIN_MODE_IN , "mosi"    , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+    {   6, CH341_PIN_MODE_IN , "gpio6"   , 0 }, // used as input (only)
+    {   7, CH341_PIN_MODE_IN , "miso"    , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+    {   8, CH341_PIN_MODE_IN , "err"     , 0 },
+    {   9, CH341_PIN_MODE_IN , "pemp"    , 0 },
+    {   10, CH341_PIN_MODE_IN , "int"    , 1 },
+    {   11, CH341_PIN_MODE_IN , "slct"   , 0 },
+    {   13, CH341_PIN_MODE_IN , "wait"   , 0 },
+    {   14, CH341_PIN_MODE_IN , "autofd" , 0 },
+    {   15, CH341_PIN_MODE_IN , "slctin" , 0 },
+    {   23, CH341_PIN_MODE_IN , "sda"    , 0 }
 };
 
 #define CH341_GPIO_NUM_PINS (sizeof(ch341_board_config) / sizeof(ch341_board_config[0]))
@@ -163,11 +196,11 @@ struct ch341_device
     // GPIO device description
     struct gpio_chip         gpio;                              // chip descriptor for GPIOs
     uint8_t                  gpio_num;                          // number of pins used as GPIOs    
-    uint8_t                  gpio_mask;                         // configuratoin mask defines IN/OUT pins
-    uint8_t                  gpio_io_data;                      // current value of CH341 I/O register
+    uint32_t                 gpio_mask;                         // configuratoin mask defines IN/OUT pins
+    uint32_t                 gpio_io_data;                      // current value of CH341 I/O register
     struct task_struct *     gpio_thread;                       // GPIO poll thread
     struct ch341_pin_config* gpio_pins   [CH341_GPIO_NUM_PINS]; // pin configurations (gpio_num elements)
-    uint8_t                  gpio_bits   [CH341_GPIO_NUM_PINS]; // bit of I/O data byte (gpio_num elements)
+    uint32_t                 gpio_bits   [CH341_GPIO_NUM_PINS]; // bitmask in status word (gpio_num elements)
     uint8_t                  gpio_values [CH341_GPIO_NUM_PINS]; // current values (gpio_num elements)
     const char*              gpio_names  [CH341_GPIO_NUM_PINS]; // pin names  (gpio_num elements)
     int                      gpio_irq_map[CH341_GPIO_NUM_PINS]; // GPIO to IRQ map (gpio_num elements)
@@ -212,35 +245,29 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
 
     for (i = 0; i < CH341_GPIO_NUM_PINS; i++)
     {
-        cfg = ch341_board_config + i;
+        uint32_t msk;
 
-        if (cfg->pin == 0)
-            continue;
+        cfg = ch341_board_config + i;
             
         // --- check correct pin configuration ------------
+        msk = 1 << cfg->bitNum;
             
-        // is pin configurable at all
-        if (cfg->pin < 15 || (cfg->pin > 17 && cfg->pin != 19 && cfg->pin != 21))
-        {
-            DEV_ERR(CH341_IF_ADDR, "pin %d: is not configurable", cfg->pin);
-            return -EINVAL;
-        }
-
         // is pin configured correctly as input in case of pin 21
-        else if (cfg->pin == 21 && cfg->mode != CH341_PIN_MODE_IN)
+        if (!(msk & CH341_OUTPUT_OK_MASK) && cfg->mode != CH341_PIN_MODE_IN)
         {
-            DEV_ERR(CH341_IF_ADDR, "pin 21: must be an input");
+            DEV_ERR(CH341_IF_ADDR, "bit %d: must be an input", cfg->bitNum);
             return -EINVAL;
         }
 
         // is pin configurable as CS signal
-        else if (cfg->pin > 17 && cfg->mode == CH341_PIN_MODE_CS)
+        else if (!(msk & CH341_CS_OK_MASK) && cfg->mode == CH341_PIN_MODE_CS)
         {
-            DEV_ERR(CH341_IF_ADDR, "pin %d: can't be used as CS signal", cfg->pin);
+            DEV_ERR(CH341_IF_ADDR, "bit %d: can't be used as CS signal", cfg->bitNum);
             return -EINVAL;
         }
 
         // --- read in pin configuration
+        ch341_dev->gpio_bits[ch341_dev->gpio_num] = msk;
 
         if (cfg->mode == CH341_PIN_MODE_CS)
         {
@@ -248,7 +275,7 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
             ch341_spi_devices[ch341_dev->slave_num] = ch341_spi_device_template;
             ch341_spi_devices[ch341_dev->slave_num].bus_num      = CH341_SPI_BUS_NUM;
             ch341_spi_devices[ch341_dev->slave_num].mode         = CH341_SPI_MODE;
-            ch341_spi_devices[ch341_dev->slave_num].chip_select  = cfg->pin - 15;
+            ch341_spi_devices[ch341_dev->slave_num].chip_select  = cfg->bitNum;
 
             DEV_INFO (CH341_IF_ADDR, "output %s SPI slave with cs=%d", 
                       cfg->name, ch341_spi_devices[ch341_dev->slave_num].chip_select);
@@ -262,16 +289,6 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
             ch341_dev->gpio_pins   [ch341_dev->gpio_num] = cfg;
             ch341_dev->gpio_irq_map[ch341_dev->gpio_num] = -1; // no valid IRQ
             
-            // map CH341 pin to bit D0...D7 in the CH341 I/O data byte
-            switch (ch341_board_config[i].pin)
-            {
-                case 15: ch341_dev->gpio_bits[ch341_dev->gpio_num] = 0x01; break; // D0/CS0   (default OUT)
-                case 16: ch341_dev->gpio_bits[ch341_dev->gpio_num] = 0x02; break; // D1/CS1   (default OUT)
-                case 17: ch341_dev->gpio_bits[ch341_dev->gpio_num] = 0x04; break; // D2/CS2   (default OUT)
-                case 19: ch341_dev->gpio_bits[ch341_dev->gpio_num] = 0x10; break; // D4/DOUT2 (default OUT)
-                case 21: ch341_dev->gpio_bits[ch341_dev->gpio_num] = 0x40; break; // D6/DIN2  (default IN )
-            }
-            
             // GPIO pins can generate IRQs when set to input mode
             ch341_dev->gpio_irq_map[ch341_dev->gpio_num] = ch341_dev->irq_num;
             ch341_dev->irq_gpio_map[ch341_dev->irq_num]  = ch341_dev->gpio_num;
@@ -281,8 +298,8 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
                 if (ch341_dev->irq_hw != -1)
                 {
                     DEV_ERR(CH341_IF_ADDR, 
-                    "pin %d: only one GPIO can be connected to the hardware IRQ", 
-                    cfg->pin);
+                    "bit %d: only one GPIO can be connected to the hardware IRQ", 
+                    cfg->bitNum);
                     return -EINVAL;
                 }
                 
@@ -326,6 +343,77 @@ static void ch341_cfg_remove (struct ch341_device* ch341_dev)
 static struct mutex ch341_lock;
 
 #define ch341_spi_maser_to_dev(m) *((struct ch341_device**)spi_master_get_devdata(m))
+
+/*
+Get Status Reverse Engineering
+A note for future developers @icenowy reverse engineered the windows DLL getstatus operation. @geeksville used this great information
+to add an implementation for this linux driver.
+Her email is here:
+I reverse-engineered the CH341GetInput function in the DLL.
+
+bool CH341GetInput(ULONG iIndex,PULONG iStatus)
+{
+  bool ret;
+  bool wr_ret;
+  byte buf [3];
+  ULONG dev_index;
+
+  // 0x2cac  19  CH341GetInput
+  dev_index = iIndex;
+  if (CH341ICVersions[iIndex] < 0x20) {
+                    
+    ret = CH341GetStatus(iIndex,iStatus); // IC Ver is original CH341 
+  }
+  else {
+    iIndex = 0;
+    buf[0] = 0xa0;
+    wr_ret = CH341WriteRead(dev_index,1,buf,0x20,1,&iIndex,buf);
+    if (wr_ret == 0) {
+      ret = false;
+    }
+    else {
+      *iStatus = ((buf[2] & 0x80) << 8 | buf[1] & 0xef) << 8 |
+(uint)buf[0];
+      ret = true;
+    }
+  }
+  return ret;
+}
+
+CH341WriteRead seems to be doing bulk transfer, and new CH341F chips
+should not be IC Ver 0x10 (IC ver has 3 values, 0x10, 0x20 and 0x30).
+
+For this function, the result format is
+
+ 位 7-位 0 对应 CH341 的 D7-D0 引脚,
+ 位 8 对应 CH341 的 ERR#引脚,
+ 位 9 对应 CH341 的 PEMP 引脚,
+ 位 10 对应 CH341 的 INT#引脚,
+ 位 11 对应 CH341 的 SLCT 引脚,
+ 位 13 对应 CH341 的 BUSY/WAIT#引脚,
+ 位 14 对应 CH341 的 AUTOFD#/DATAS#引脚,
+ 位 15 对应 CH341 的 SLCTIN#/ADDRS#引脚,
+ 位 23 对应 CH341 的 SDA 引脚
+*/
+static int ch341_spi_get_status (struct ch341_device* ch341_dev)
+{
+    int result;
+    uint32_t status;
+
+    mutex_lock (&ch341_lock);
+
+    ch341_dev->out_buf[0] = CH341_CMD_GET_STATUS;
+
+    result = ch341_usb_transfer(ch341_dev, 1, 3);
+
+    status = ((ch341_dev->in_buf[2] & 0x80) << 16) | ((ch341_dev->in_buf[1] & 0xef) << 8) | ch341_dev->in_buf[0];
+    ch341_dev->gpio_io_data = status; // these bits include current GPIO values (and more)
+
+    mutex_unlock (&ch341_lock);
+
+    return (result < 0) ? result : CH341_OK;
+}
+
 
 static int ch341_spi_read_inputs (struct ch341_device* ch341_dev)
 {
@@ -527,8 +615,7 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
 }
 
 static void ch341_set_cs(struct spi_device *spi, bool enable) {
-    struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->master);
-
+    // struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->master);
     // DEV_DBG (CH341_IF_ADDR, "cs=%d", enable);    
     ch341_spi_set_cs (spi, enable);
 }
@@ -894,7 +981,7 @@ static void ch341_irq_remove (struct ch341_device* ch341_dev)
 
 void ch341_gpio_read_inputs (struct ch341_device* ch341_dev)
 {
-    uint8_t old_io_data;
+    uint32_t old_io_data;
     uint8_t old_value;
     uint8_t new_value;
     uint8_t gpio;
@@ -908,7 +995,7 @@ void ch341_gpio_read_inputs (struct ch341_device* ch341_dev)
     old_io_data = ch341_dev->gpio_io_data;
 
     // read current values
-    ch341_spi_read_inputs (ch341_dev);
+    ch341_spi_get_status (ch341_dev);
 
     for (i = 0; i < ch341_dev->irq_num; i++)
     {
@@ -1061,6 +1148,7 @@ void ch341_gpio_set (struct gpio_chip *chip, unsigned offset, int value)
     
     CHECK_PARAM (ch341_dev);
     CHECK_PARAM (offset < ch341_dev->gpio_num);
+    CHECK_PARAM (ch341_dev->gpio_pins[offset]->mode != CH341_PIN_MODE_IN);
 
     if (value)
         ch341_dev->gpio_io_data |= ch341_dev->gpio_bits[offset];
@@ -1136,9 +1224,10 @@ int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool inpu
     CHECK_PARAM_RET (offset < ch341_dev->gpio_num, -EINVAL);
 
     // pin configured correctly if it is pin 21
-    if (ch341_dev->gpio_pins[offset]->pin == 21 && !input)
+    uint32_t msk = 1 << ch341_dev->gpio_pins[offset]->bitNum;
+    if (!(msk & CH341_DIR_OK_MASK) && !input)
     {
-        DEV_ERR(CH341_IF_ADDR, "pin 21: must be an input");
+        DEV_ERR(CH341_IF_ADDR, "pin must be an input");
         return -EINVAL;
     }
 
