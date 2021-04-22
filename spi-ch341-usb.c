@@ -113,7 +113,7 @@
  *  bit 0-7 CH341  D7-D0,
  bit 8 对应 CH341 的 ERR#引脚, (pin 5)
  bit 9 对应 CH341 的 PEMP 引脚, (pin 6)
- bit 10 对应 CH341 的 INT#引脚, (pin 26)
+ bit 10 对应 CH341 的 INT#引脚, (pin 7) 
  bit 11 对应 CH341 的 SLCT 引脚, (pin 8)
  bit 13 对应 CH341 的 BUSY/WAIT#引脚, (pin 27)
  bit 14 对应 CH341 的 AUTOFD#/DATAS#引脚, (pin 4)
@@ -128,8 +128,9 @@ struct ch341_pin_config {
     bool    hwirq;  // connected to hardware interrupt (only one pin can have true)
 };
 
-// Which bitnums can change direction
-#define CH341_DIR_OK_MASK       0x0037
+// Which bitnums be used for inputs or outputs, note: only used for non-spi D0-D7, other bits do not support change of direction at all
+#define CH341_IN_OK_MASK        0x0FF8 // gpio4, gpio6, and all of the status bits
+#define CH341_OUT_OK_MASK       0x0057 // cs0, cs1, cs2, gpio4 and gpio6 only
 
 // Which bitnums can be set as outputs
 #define CH341_OUTPUT_OK_MASK    0x0017
@@ -154,7 +155,8 @@ struct ch341_pin_config ch341_board_config[] =
     {   11, CH341_PIN_MODE_IN , "slct"   , 0 },
     {   13, CH341_PIN_MODE_IN , "wait"   , 0 },
     {   14, CH341_PIN_MODE_IN , "autofd" , 0 },
-    {   15, CH341_PIN_MODE_IN , "slctin" , 0 },
+    // Not really needed: @geeksville tested on his devboard and confirmed you can read slct just fine from bit 11.
+    // {   15, CH341_PIN_MODE_IN , "slctin" , 0 },
     {   23, CH341_PIN_MODE_IN , "sda"    , 0 }
 };
 
@@ -204,7 +206,9 @@ struct ch341_device
     uint8_t                  gpio_values [CH341_GPIO_NUM_PINS]; // current values (gpio_num elements)
     const char*              gpio_names  [CH341_GPIO_NUM_PINS]; // pin names  (gpio_num elements)
     int                      gpio_irq_map[CH341_GPIO_NUM_PINS]; // GPIO to IRQ map (gpio_num elements)
-    
+    uint32_t                 gpio_out_ok_mask;                  // set bits indicate pins which can be outputs
+    uint32_t                 gpio_in_ok_mask;                   // set bits indicate pins which can be inputs
+
     // IRQ device description
     struct irq_chip   irq;                                // chip descriptor for IRQs
     uint8_t           irq_num;                            // number of pins with IRQs
@@ -235,7 +239,9 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
 
     CHECK_PARAM_RET (ch341_dev, -EINVAL);
 
-    ch341_dev->gpio_mask   = 0x3f; // default - IN: MISO, IN2 - OUT: MOSI, OUT2, SCK, CS#;
+    ch341_dev->gpio_mask   = 0x3f; // set bits for outputs. default - IN: MISO, IN2 - OUT: MOSI, OUT2, SCK, CS#;
+    ch341_dev->gpio_out_ok_mask = CH341_OUT_OK_MASK;
+    ch341_dev->gpio_in_ok_mask = CH341_IN_OK_MASK;    
     ch341_dev->gpio_num    = 0;
     ch341_dev->gpio_thread = 0;
 
@@ -277,47 +283,48 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
             ch341_spi_devices[ch341_dev->slave_num].mode         = CH341_SPI_MODE;
             ch341_spi_devices[ch341_dev->slave_num].chip_select  = cfg->bitNum;
 
+            // cs pins can't be changed to be inputs
+            ch341_dev->gpio_in_ok_mask &= ~msk;
+
             DEV_INFO (CH341_IF_ADDR, "output %s SPI slave with cs=%d", 
                       cfg->name, ch341_spi_devices[ch341_dev->slave_num].chip_select);
 
             ch341_dev->slave_num++;    
         }
-        else // CH341_PIN_MODE_IN || CH341_PIN_MODE_OUT
-        {
-            // if pin is not configured as CS signal, set GPIO configuration
-            ch341_dev->gpio_names  [ch341_dev->gpio_num] = cfg->name;
-            ch341_dev->gpio_pins   [ch341_dev->gpio_num] = cfg;
-            ch341_dev->gpio_irq_map[ch341_dev->gpio_num] = -1; // no valid IRQ
+      
+        // now expose as a GPIO (note: even if a pin is a chip select, we also expose it as a GPIO, so apps can do low level control if needed)
+        ch341_dev->gpio_names  [ch341_dev->gpio_num] = cfg->name;
+        ch341_dev->gpio_pins   [ch341_dev->gpio_num] = cfg;
+        ch341_dev->gpio_irq_map[ch341_dev->gpio_num] = -1; // no valid IRQ
+        
+        // GPIO pins can generate IRQs when set to input mode
+        ch341_dev->gpio_irq_map[ch341_dev->gpio_num] = ch341_dev->irq_num;
+        ch341_dev->irq_gpio_map[ch341_dev->irq_num]  = ch341_dev->gpio_num;
             
-            // GPIO pins can generate IRQs when set to input mode
-            ch341_dev->gpio_irq_map[ch341_dev->gpio_num] = ch341_dev->irq_num;
-            ch341_dev->irq_gpio_map[ch341_dev->irq_num]  = ch341_dev->gpio_num;
-                
-            if (cfg->hwirq)
+        if (cfg->hwirq)
+        {
+            if (ch341_dev->irq_hw != -1)
             {
-                if (ch341_dev->irq_hw != -1)
-                {
-                    DEV_ERR(CH341_IF_ADDR, 
-                    "bit %d: only one GPIO can be connected to the hardware IRQ", 
-                    cfg->bitNum);
-                    return -EINVAL;
-                }
-                
-                ch341_dev->irq_hw = ch341_dev->irq_num;
+                DEV_ERR(CH341_IF_ADDR, 
+                "bit %d: only one GPIO can be connected to the hardware IRQ", 
+                cfg->bitNum);
+                return -EINVAL;
             }
-               
-            if (cfg->mode == CH341_PIN_MODE_IN)
-                // if pin is INPUT, it has to be masked out in GPIO direction mask
-                ch341_dev->gpio_mask &= ~ch341_dev->gpio_bits[ch341_dev->gpio_num];
-
-            DEV_INFO (CH341_IF_ADDR, "%s %s gpio=%d irq=%d %s", 
-                      cfg->mode == CH341_PIN_MODE_IN ? "input " : "output",
-                      cfg->name, ch341_dev->gpio_num, ch341_dev->irq_num,
-                      cfg->hwirq ? "(hwirq)" : "");
-
-            ch341_dev->irq_num++;
-            ch341_dev->gpio_num++;
+            
+            ch341_dev->irq_hw = ch341_dev->irq_num;
         }
+            
+        if (cfg->mode == CH341_PIN_MODE_IN)
+            // if pin is INPUT, it has to be masked out in GPIO direction mask
+            ch341_dev->gpio_mask &= ~msk;
+
+        DEV_INFO (CH341_IF_ADDR, "%s %s gpio=%d irq=%d %s", 
+                    cfg->mode == CH341_PIN_MODE_IN ? "input " : "output",
+                    cfg->name, ch341_dev->gpio_num, ch341_dev->irq_num,
+                    cfg->hwirq ? "(hwirq)" : "");
+
+        ch341_dev->irq_num++;
+        ch341_dev->gpio_num++;
     }
     
     if (ch341_dev->slave_num == 0)
@@ -705,7 +712,7 @@ static int spi_transfer_one_message(struct spi_master *master,
 				    struct spi_message *msg)
 {
     struct spi_device *spi = msg->spi;
-    struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(master);
+    // struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(master);
 
 	struct spi_transfer *xfer;
 	int ret = 0;
@@ -1214,6 +1221,8 @@ int ch341_gpio_get_direction (struct gpio_chip *chip, unsigned offset)
 
 int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool input)
 {
+    uint32_t msk;
+
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
     struct ch341_device* ch341_dev = (struct ch341_device*)gpiochip_get_data(chip);
     #else
@@ -1224,12 +1233,17 @@ int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool inpu
     CHECK_PARAM_RET (offset < ch341_dev->gpio_num, -EINVAL);
 
     // pin configured correctly if it is pin 21
-    uint32_t msk = 1 << ch341_dev->gpio_pins[offset]->bitNum;
-    if (!(msk & CH341_DIR_OK_MASK) && !input)
+    msk = 1 << ch341_dev->gpio_pins[offset]->bitNum;
+    if (!(msk & ch341_dev->gpio_out_ok_mask) && !input)
     {
         DEV_ERR(CH341_IF_ADDR, "pin must be an input");
         return -EINVAL;
     }
+    if (!(msk & ch341_dev->gpio_in_ok_mask) && input)
+    {
+        DEV_ERR(CH341_IF_ADDR, "pin must be an output");
+        return -EINVAL;
+    }    
 
     DEV_INFO (CH341_IF_ADDR, "gpio=%d direction=%s", offset, input ? "input" :  "output");
 
