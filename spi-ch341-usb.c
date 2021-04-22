@@ -456,7 +456,7 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
     ch341_dev->out_buf[2] = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & CH341_OUT_OK_MASK);
     ch341_dev->out_buf[3] = CH341_CMD_UIO_STM_END;
 
-    // DEV_DBG(CH341_IF_ADDR, "%02x", ch341_dev->out_buf[2]);
+    DEV_DBG(CH341_IF_ADDR, "dir=0x%02x val=0x%02x", ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
     
     result = ch341_usb_transfer(ch341_dev, 4, 0);
 
@@ -664,8 +664,11 @@ static int ch341_spi_transfer_low(struct spi_master *master,
 
         // fill output buffer with command and output data, controller expects lsb first
         ch341_dev->out_buf[0] = CH341_CMD_SPI_STREAM;
-        for (i = 0; i < t->len; i++)
-            ch341_dev->out_buf[i+1] = lsb ? tx[i] : ch341_spi_swap_byte(tx[i]);
+        for (i = 0; i < t->len; i++) {
+            uint8_t b = lsb ? tx[i] : ch341_spi_swap_byte(tx[i]);
+            ch341_dev->out_buf[i+1] = b;
+            DEV_DBG (CH341_IF_ADDR, "outb=0x%02x", b);
+        }
 
         // transfer output and input data
         if(t->len)
@@ -677,8 +680,10 @@ static int ch341_spi_transfer_low(struct spi_master *master,
 
         // fill input data with input buffer, controller delivers lsb first
         if (result >= 0 && rx)
-            for (i = 0; i < t->len; i++)
+            for (i = 0; i < t->len; i++) {
                 rx[i] = lsb ? ch341_dev->in_buf[i] : ch341_spi_swap_byte(ch341_dev->in_buf[i]);
+                DEV_DBG (CH341_IF_ADDR, "inb=0x%02x", rx[i]);
+            }
 
     }
 
@@ -1118,7 +1123,7 @@ int ch341_gpio_get (struct gpio_chip *chip, unsigned offset)
 
     value = (ch341_dev->gpio_io_data & ch341_dev->gpio_bits[offset]) ? 1 : 0;
     
-    // DEV_DBG (CH341_IF_ADDR, "offset=%u value=%d io_data=%02x", 
+    // DEV_DBG (CH341_IF_ADDR, "offset=%u value=%d io_data=%08x", 
     //          offset, value, ch341_dev->gpio_io_data);
     
     return value;
@@ -1139,6 +1144,8 @@ int ch341_gpio_get_multiple (struct gpio_chip *chip,
     CHECK_PARAM_RET (mask, -EINVAL);
     CHECK_PARAM_RET (bits, -EINVAL);
 
+    *bits = 0; // init to zero
+
     for (i = 0; i < ch341_dev->gpio_num; i++)
         if (*mask & (1 << i))
         {
@@ -1146,8 +1153,7 @@ int ch341_gpio_get_multiple (struct gpio_chip *chip,
             *bits |= (((ch341_dev->gpio_io_data & ch341_dev->gpio_bits[i]) ? 1 : 0) << i);
         }
 
-    // DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=%02x", 
-    //          *mask, *bits, ch341_dev->gpio_io_data);
+    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=0x%08lx io_data=0x%08x", *mask, *bits, ch341_dev->gpio_io_data);
 
     return CH341_OK;
 }
@@ -1169,7 +1175,7 @@ void ch341_gpio_set (struct gpio_chip *chip, unsigned offset, int value)
     else
         ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[offset];
 
-    DEV_DBG (CH341_IF_ADDR, "name=%s value=%d io_data=0x%04x", 
+    DEV_DBG (CH341_IF_ADDR, "name=%s value=%d io_data=0x%08x", 
               ch341_dev->gpio_pins[offset]->name, value, ch341_dev->gpio_io_data);
 
     ch341_spi_write_outputs (ch341_dev);
@@ -1190,7 +1196,7 @@ void ch341_gpio_set_multiple (struct gpio_chip *chip,
     CHECK_PARAM (bits);
 
     for (i = 0; i < ch341_dev->gpio_num; i++)
-        if (*mask & (1 << i) && ch341_dev->gpio_pins[i]->mode == CH341_PIN_MODE_OUT)
+        if ((*mask & (1 << i)) && ch341_dev->gpio_pins[i]->mode != CH341_PIN_MODE_IN) // if out or CS we will set the pin
         {
             if (*bits & (1 << i))
                 ch341_dev->gpio_io_data |= ch341_dev->gpio_bits[i];
@@ -1198,7 +1204,7 @@ void ch341_gpio_set_multiple (struct gpio_chip *chip,
                 ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[i];
         }
         
-    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%04x", 
+    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%08x", 
               *mask, *bits, ch341_dev->gpio_io_data);
 
     ch341_spi_write_outputs (ch341_dev);
@@ -1221,7 +1227,7 @@ int ch341_gpio_get_direction (struct gpio_chip *chip, unsigned offset)
 
     mode = (ch341_dev->gpio_pins[offset]->mode == CH341_PIN_MODE_IN) ? 1 : 0;
 
-    DEV_DBG (CH341_IF_ADDR, "gpio=%d dir=%d", offset, mode);
+    DEV_DBG (CH341_IF_ADDR, "gpio=%s dir=%d", ch341_dev->gpio_pins[offset]->name, mode);
 
     return mode;
 }
@@ -1252,7 +1258,7 @@ int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool inpu
         return -EINVAL;
     }    
 
-    DEV_INFO (CH341_IF_ADDR, "gpio=%d direction=%s", offset, input ? "input" :  "output");
+    DEV_INFO (CH341_IF_ADDR, "gpio=%s direction=%s", ch341_dev->gpio_pins[offset]->name, input ? "input" :  "output");
 
     // We allow users to set chip select pins to be "outputs", and let those users write directly to those pins
     // but we don't want to forget that the pin is special
@@ -1339,11 +1345,11 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
     gpio->direction_output  = ch341_gpio_direction_output;
     gpio->get               = ch341_gpio_get;
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,15,0)
-    gpio->get_multiple      = ch341_gpio_get_multiple;  // FIXME: NOT TESTED
+    gpio->get_multiple      = ch341_gpio_get_multiple;
     #endif
     gpio->set               = ch341_gpio_set;
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,19,0)
-    gpio->set_multiple      = ch341_gpio_set_multiple;  // FIXME: NOT TESTED
+    gpio->set_multiple      = ch341_gpio_set_multiple;
     #endif
     
     gpio->to_irq            = ch341_gpio_to_irq;
