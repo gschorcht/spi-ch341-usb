@@ -823,14 +823,18 @@ static void ch341_spi_remove (struct ch341_device* ch341_dev)
     
     CHECK_PARAM (ch341_dev);
     
-    for (i = 0; i < ch341_dev->slave_num; i++)
+    // Not needed because spi_unregister_master (spi_unregister_controller) will do this automatically
+    /* for (i = 0; i < ch341_dev->slave_num; i++)
         if (ch341_dev->slaves[i])
             spi_unregister_device (ch341_dev->slaves[i]);
+    */
 
     if (ch341_dev->master)
     {
         spi_unregister_master (ch341_dev->master);
-        spi_master_put (ch341_dev->master);
+
+        // based on inspection of existing spi drivers in the kernel, this seems unnecessary (and possibly harmful)
+        // spi_master_put (ch341_dev->master);
     }
 
     return;
