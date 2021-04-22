@@ -130,7 +130,7 @@ struct ch341_pin_config {
 
 // Which bitnums be used for inputs or outputs, note: only used for non-spi D0-D7, other bits do not support change of direction at all
 #define CH341_IN_OK_MASK        0x0FF8 // gpio4, gpio6, and all of the status bits
-#define CH341_OUT_OK_MASK       0x0057 // cs0, cs1, cs2, gpio4 and gpio6 only
+#define CH341_OUT_OK_MASK       0x0017 // cs0, cs1, cs2, gpio4 only
 
 // Which bitnums can be set as outputs
 #define CH341_OUTPUT_OK_MASK    0x0017
@@ -421,6 +421,7 @@ static int ch341_spi_get_status (struct ch341_device* ch341_dev)
     return (result < 0) ? result : CH341_OK;
 }
 
+/* No longer used, we now use the get_status operation found by @icesnoy - because it returns all pins (not just the gpios)
 
 static int ch341_spi_read_inputs (struct ch341_device* ch341_dev)
 {
@@ -442,6 +443,7 @@ static int ch341_spi_read_inputs (struct ch341_device* ch341_dev)
 
     return (result < 0) ? result : CH341_OK;
 }
+*/
 
 static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
 {
@@ -450,8 +452,8 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
     mutex_lock (&ch341_lock);
 
     ch341_dev->out_buf[0] = CH341_CMD_UIO_STREAM;
-    ch341_dev->out_buf[1] = CH341_CMD_UIO_STM_DIR | ch341_dev->gpio_mask;
-    ch341_dev->out_buf[2] = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask);
+    ch341_dev->out_buf[1] = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & CH341_OUT_OK_MASK);
+    ch341_dev->out_buf[2] = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & CH341_OUT_OK_MASK);
     ch341_dev->out_buf[3] = CH341_CMD_UIO_STM_END;
 
     // DEV_DBG(CH341_IF_ADDR, "%02x", ch341_dev->out_buf[2]);
@@ -819,8 +821,6 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
 
 static void ch341_spi_remove (struct ch341_device* ch341_dev)
 {
-    int i;
-    
     CHECK_PARAM (ch341_dev);
     
     // Not needed because spi_unregister_master (spi_unregister_controller) will do this automatically
@@ -1008,6 +1008,9 @@ void ch341_gpio_read_inputs (struct ch341_device* ch341_dev)
     // read current values
     ch341_spi_get_status (ch341_dev);
 
+    if(old_io_data != ch341_dev->gpio_io_data)
+        DEV_DBG (CH341_IF_ADDR, "pins changed 0x%04x, newval 0x%04x", (old_io_data ^ ch341_dev->gpio_io_data), ch341_dev->gpio_io_data);
+
     for (i = 0; i < ch341_dev->irq_num; i++)
     {
         // determine local GPIO for each IRQ
@@ -1166,8 +1169,8 @@ void ch341_gpio_set (struct gpio_chip *chip, unsigned offset, int value)
     else
         ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[offset];
 
-    // DEV_DBG (CH341_IF_ADDR, "offset=%u value=%d io_data=%02x", 
-    //          offset, value, ch341_dev->gpio_io_data);
+    DEV_DBG (CH341_IF_ADDR, "name=%s value=%d io_data=0x%04x", 
+              ch341_dev->gpio_pins[offset]->name, value, ch341_dev->gpio_io_data);
 
     ch341_spi_write_outputs (ch341_dev);
 }
@@ -1195,8 +1198,8 @@ void ch341_gpio_set_multiple (struct gpio_chip *chip,
                 ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[i];
         }
         
-    // DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=%02x", 
-    //          *mask, *bits, ch341_dev->gpio_io_data);
+    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%04x", 
+              *mask, *bits, ch341_dev->gpio_io_data);
 
     ch341_spi_write_outputs (ch341_dev);
 
@@ -1251,11 +1254,14 @@ int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool inpu
 
     DEV_INFO (CH341_IF_ADDR, "gpio=%d direction=%s", offset, input ? "input" :  "output");
 
-    ch341_dev->gpio_pins[offset]->mode = input ? CH341_PIN_MODE_IN : CH341_PIN_MODE_OUT;
+    // We allow users to set chip select pins to be "outputs", and let those users write directly to those pins
+    // but we don't want to forget that the pin is special
+    if(ch341_dev->gpio_pins[offset]->mode != CH341_PIN_MODE_CS)
+        ch341_dev->gpio_pins[offset]->mode = input ? CH341_PIN_MODE_IN : CH341_PIN_MODE_OUT;
 
     // mask in / mask out the according bit in direction mask
-    if (ch341_dev->gpio_pins[offset]->mode == CH341_PIN_MODE_OUT)    
-        ch341_dev->gpio_mask |= ch341_dev->gpio_bits[offset];
+    if (ch341_dev->gpio_pins[offset]->mode != CH341_PIN_MODE_IN)    
+        ch341_dev->gpio_mask |= ch341_dev->gpio_bits[offset]; // if in CS or OUT mode
     else
         ch341_dev->gpio_mask &= ~ch341_dev->gpio_bits[offset];
     
