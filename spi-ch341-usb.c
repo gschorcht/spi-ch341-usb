@@ -489,7 +489,7 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
     CHECK_PARAM_RET (spi, -EINVAL);
     CHECK_PARAM_RET (ch341_dev = ch341_spi_maser_to_dev(spi->master), -EINVAL);
 
-    DEV_DBG (CH341_IF_ADDR, "active %s", active ? "true" : "false");
+    // DEV_DBG (CH341_IF_ADDR, "active %s", active ? "true" : "false");
 
     if (spi->chip_select > CH341_SPI_MAX_NUM_DEVICES)
     {
@@ -508,7 +508,7 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
     ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask);
     ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
-    DEV_DBG(CH341_IF_ADDR, "mask=0x%08x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
+    // DEV_DBG(CH341_IF_ADDR, "mask=0x%08x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
         
     result = ch341_usb_transfer(ch341_dev, 4, 0);
 
@@ -668,7 +668,7 @@ static int ch341_spi_transfer_low(struct spi_master *master,
         for (i = 0; i < t->len; i++) {
             uint8_t b = lsb ? tx[i] : ch341_spi_swap_byte(tx[i]);
             ch341_dev->out_buf[i+1] = b;
-            DEV_DBG (CH341_IF_ADDR, "outb=0x%02x", b);
+            // DEV_DBG (CH341_IF_ADDR, "outb=0x%02x", tx[i]);
         }
 
         // transfer output and input data
@@ -683,12 +683,15 @@ static int ch341_spi_transfer_low(struct spi_master *master,
         if (result >= 0 && rx)
             for (i = 0; i < t->len; i++) {
                 rx[i] = lsb ? ch341_dev->in_buf[i] : ch341_spi_swap_byte(ch341_dev->in_buf[i]);
-                DEV_DBG (CH341_IF_ADDR, "inb=0x%02x", rx[i]);
+                // DEV_DBG (CH341_IF_ADDR, "inb=0x%02x", rx[i]);
             }
 
     }
 
-    DEV_DBG (CH341_IF_ADDR, "len=%u, csChange=%d, result=%d", t->len, t->cs_change, result);
+    if(t->len == 1) // show bytes transfered if in the common single byte case
+        DEV_DBG (CH341_IF_ADDR, "len=%u, csChange=%d, result=%d, txb=9x%02x, rxb=0x%02x", t->len, t->cs_change, result, tx[0], rx[0]);
+    else
+        DEV_DBG (CH341_IF_ADDR, "len=%u, csChange=%d, result=%d", t->len, t->cs_change, result);
 
     return result;
 }
@@ -1015,7 +1018,7 @@ void ch341_gpio_read_inputs (struct ch341_device* ch341_dev)
     ch341_spi_get_status (ch341_dev);
 
     if(old_io_data != ch341_dev->gpio_io_data)
-        DEV_DBG (CH341_IF_ADDR, "pins changed 0x%04x, newval 0x%04x", (old_io_data ^ ch341_dev->gpio_io_data), ch341_dev->gpio_io_data);
+        DEV_DBG (CH341_IF_ADDR, "pins changed 0x%x, oldval 0x%x, newval 0x%x", (old_io_data ^ ch341_dev->gpio_io_data), old_io_data, ch341_dev->gpio_io_data);
 
     for (i = 0; i < ch341_dev->irq_num; i++)
     {
@@ -1205,8 +1208,8 @@ void ch341_gpio_set_multiple (struct gpio_chip *chip,
                 ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[i];
         }
         
-    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%08x", 
-              *mask, *bits, ch341_dev->gpio_io_data);
+    // DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%08x", 
+    //           *mask, *bits, ch341_dev->gpio_io_data);
 
     ch341_spi_write_outputs (ch341_dev);
 
@@ -1487,17 +1490,24 @@ static void ch341_usb_complete_intr_urb (struct urb *urb)
 
     if (!urb->status)
     {
+        uint32_t mask = ch341_dev->gpio_bits[ch341_dev->irq_gpio_map[ch341_dev->irq_hw]];
+        bool wasHigh = !!(ch341_dev->gpio_io_data & mask);
+
         // hardware IRQs are only generated for one IRQ and rising edges 0 -> 1
-        DEV_DBG (CH341_IF_ADDR, "%d", urb->status);
+        // DEV_DBG (CH341_IF_ADDR, "hw irq rise %x", mask);
 
         // because of asynchronous GPIO read, the GPIO value has to be set to 1
-        ch341_dev->gpio_io_data |= ch341_dev->gpio_bits[ch341_dev->irq_gpio_map[ch341_dev->irq_hw]];
+        ch341_dev->gpio_io_data |= mask;
         
         // IRQ has to be triggered
-        ch341_irq_check (ch341_dev, ch341_dev->irq_hw, 0, 1, true);
+        ch341_irq_check (ch341_dev, ch341_dev->irq_hw, wasHigh, 1, true);
         
         // submit next request
         usb_submit_urb(ch341_dev->intr_urb, GFP_ATOMIC);
+    }
+    else {
+        // Never invoked
+        // DEV_DBG (CH341_IF_ADDR, "irq fall");
     }
 }
 
