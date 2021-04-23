@@ -690,7 +690,7 @@ static int ch341_spi_transfer_low(struct spi_master *master,
     }
 
     if(t->len == 1) // show bytes transfered if in the common single byte case
-        DEV_DBG (CH341_IF_ADDR, "len=%u, csChange=%d, result=%d, txb=9x%02x, rxb=0x%02x", t->len, t->cs_change, result, tx[0], rx[0]);
+        DEV_DBG (CH341_IF_ADDR, "len=%u, csChange=%d, result=%d, txb=0x%02x, rxb=0x%02x", t->len, t->cs_change, result, tx[0], rx[0]);
     else
         DEV_DBG (CH341_IF_ADDR, "len=%u, csChange=%d, result=%d", t->len, t->cs_change, result);
 
@@ -1108,7 +1108,7 @@ static int ch341_gpio_poll_function (void* argument)
     #ifndef CH341_POLL_WITH_SLEEP
     __set_current_state(TASK_RUNNING);
     #endif
-    
+
     complete(&ch341_dev->gpio_thread_complete);
 
     DEV_DBG (CH341_IF_ADDR, "stop");
