@@ -201,6 +201,7 @@ struct ch341_device
     uint32_t                 gpio_mask;                         // configuratoin mask defines IN/OUT pins
     uint32_t                 gpio_io_data;                      // current value of CH341 I/O register
     struct task_struct *     gpio_thread;                       // GPIO poll thread
+    struct completion        gpio_thread_complete;              // Used to wait for thread exit
     struct ch341_pin_config* gpio_pins   [CH341_GPIO_NUM_PINS]; // pin configurations (gpio_num elements)
     uint32_t                 gpio_bits   [CH341_GPIO_NUM_PINS]; // bitmask in status word (gpio_num elements)
     const char*              gpio_names  [CH341_GPIO_NUM_PINS]; // pin names  (gpio_num elements)
@@ -1108,6 +1109,8 @@ static int ch341_gpio_poll_function (void* argument)
     __set_current_state(TASK_RUNNING);
     #endif
     
+    complete(&ch341_dev->gpio_thread_complete);
+
     DEV_DBG (CH341_IF_ADDR, "stop");
 
     return 0;
@@ -1404,6 +1407,7 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
         }
 #endif
 
+    init_completion(&ch341_dev->gpio_thread_complete);
     ch341_dev->gpio_thread = kthread_run (&ch341_gpio_poll_function, ch341_dev, "spi-ch341-usb-poll");
 
     DEV_DBG (CH341_IF_ADDR, "done");
@@ -1421,6 +1425,7 @@ static void ch341_gpio_remove (struct ch341_device* ch341_dev)
     {
         kthread_stop(ch341_dev->gpio_thread);
         wake_up_process (ch341_dev->gpio_thread);
+        wait_for_completion(&ch341_dev->gpio_thread_complete);
     }
         
     if (ch341_dev->gpio.base > 0)
