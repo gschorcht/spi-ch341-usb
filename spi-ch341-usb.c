@@ -159,7 +159,7 @@ struct ch341_pin_config ch341_board_config[] =
     {   14, CH341_PIN_MODE_IN , "autofd" , 0 },
     {   15, CH341_PIN_MODE_IN , "addr"   , 0 },
 
-    {   16, CH341_PIN_MODE_OUT, "reset"  , 0 },
+    {   16, CH341_PIN_MODE_OUT, "ini"  , 0 },
     {   17, CH341_PIN_MODE_OUT, "write"  , 0 },
     {   18, CH341_PIN_MODE_OUT, "scl"    , 0 },
     {   19, CH341_PIN_MODE_OUT, "sda"    , 0 } // Example code says this is GPIO 29 but I think that is a typo (leaving out for now)
