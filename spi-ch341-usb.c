@@ -68,7 +68,9 @@
 #define CH341_USB_MAX_BULK_SIZE     32    // CH341A wMaxPacketSize for ep_02 and ep_82
 #define CH341_USB_MAX_INTR_SIZE     8     // CH341A wMaxPacketSize for ep_81
 
+#define CH341_CMD_PARA_INIT         0xB1
 #define CH341_CMD_GET_STATUS        0xA0  // See ch341_spi_get_status
+#define CH341_CMD_SET_OUTPUT        0xA1
 #define CH341_CMD_SPI_STREAM        0xA8  // SPI command
 #define CH341_CMD_UIO_STREAM        0xAB  // UIO command
 
@@ -129,11 +131,8 @@ struct ch341_pin_config {
 };
 
 // Which bitnums be used for inputs or outputs, note: only used for non-spi D0-D7, other bits do not support change of direction at all
-#define CH341_IN_OK_MASK        0x0050 // gpio4, gpio6, none of the status bits, no MISO,MOSI, SCK
-#define CH341_OUT_OK_MASK       0x0017 // cs0, cs1, cs2, gpio4 only
-
-// Which bitnums can be set as outputs
-#define CH341_OUTPUT_OK_MASK    0x0017
+#define CH341_IN_OK_MASK        0x0000ef50 // gpio4, gpio6, none of the status bits, no MISO,MOSI, SCK
+#define CH341_OUT_OK_MASK       0x000f0017 // cs0, cs1, cs2, gpio4 only
 
 // Which bitnums can be used as a chip select
 #define CH341_CS_OK_MASK        0x0007
@@ -144,20 +143,26 @@ struct ch341_pin_config ch341_board_config[] =
     {   0, CH341_PIN_MODE_CS , "cs0"     , 0 }, // used as a chip select by default
     {   1, CH341_PIN_MODE_CS , "cs1"     , 0 }, // used as a chip select by default
     {   2, CH341_PIN_MODE_CS , "cs2"     , 0 }, // used as a chip select by default
-    {   3, CH341_PIN_MODE_IN , "sck"     , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+    // {   3, CH341_PIN_MODE_IN , "sck"     , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+
     {   4, CH341_PIN_MODE_IN , "gpio4"   , 0 }, // used as input with hardware IRQ
-    {   5, CH341_PIN_MODE_IN , "mosi"    , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+    // {   5, CH341_PIN_MODE_IN , "mosi"    , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
     {   6, CH341_PIN_MODE_IN , "gpio6"   , 0 }, // used as input (only)
-    {   7, CH341_PIN_MODE_IN , "miso"    , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+    // {   7, CH341_PIN_MODE_IN , "miso"    , 0 }, // expose to userspace to allow readonly access (for hardware debugging)
+
     {   8, CH341_PIN_MODE_IN , "err"     , 0 },
     {   9, CH341_PIN_MODE_IN , "pemp"    , 0 },
     {   10, CH341_PIN_MODE_IN , "int"    , 1 },
     {   11, CH341_PIN_MODE_IN , "slct"   , 0 },
+    
     {   13, CH341_PIN_MODE_IN , "wait"   , 0 },
     {   14, CH341_PIN_MODE_IN , "autofd" , 0 },
-    // Not really needed: @geeksville tested on his devboard and confirmed you can read slct just fine from bit 11.
-    // {   15, CH341_PIN_MODE_IN , "slctin" , 0 },
-    {   23, CH341_PIN_MODE_IN , "sda"    , 0 }
+    {   15, CH341_PIN_MODE_IN , "addr"   , 0 },
+
+    {   16, CH341_PIN_MODE_OUT, "reset"  , 0 },
+    {   17, CH341_PIN_MODE_OUT, "write"  , 0 },
+    {   18, CH341_PIN_MODE_OUT, "scl"    , 0 },
+    {   19, CH341_PIN_MODE_OUT, "sda"    , 0 } // Example code says this is GPIO 29 but I think that is a typo (leaving out for now)
 };
 
 #define CH341_GPIO_NUM_PINS (sizeof(ch341_board_config) / sizeof(ch341_board_config[0]))
@@ -239,7 +244,7 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
 
     CHECK_PARAM_RET (ch341_dev, -EINVAL);
 
-    ch341_dev->gpio_mask   = 0x3f; // set bits for outputs. default - IN: MISO, IN2 - OUT: MOSI, OUT2, SCK, CS#;
+    ch341_dev->gpio_mask   = 0x3f;
     ch341_dev->gpio_out_ok_mask = CH341_OUT_OK_MASK;
     ch341_dev->gpio_in_ok_mask = CH341_IN_OK_MASK;    
     ch341_dev->gpio_num    = 0;
@@ -258,8 +263,8 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
         // --- check correct pin configuration ------------
         msk = 1 << cfg->bitNum;
             
-        // is pin configured correctly as input in case of pin 21
-        if (!(msk & CH341_OUTPUT_OK_MASK) && cfg->mode != CH341_PIN_MODE_IN)
+        // is pin configured correctly as input
+        if (!(msk & CH341_OUT_OK_MASK) && cfg->mode != CH341_PIN_MODE_IN)
         {
             DEV_ERR(CH341_IF_ADDR, "bit %d: must be an input", cfg->bitNum);
             return -EINVAL;
@@ -317,6 +322,8 @@ static int ch341_cfg_probe (struct ch341_device* ch341_dev)
         if (cfg->mode == CH341_PIN_MODE_IN && (msk & CH341_IN_OK_MASK))
             // if pin is INPUT, it has to be masked out in GPIO direction mask
             ch341_dev->gpio_mask &= ~msk;
+        else
+            ch341_dev->gpio_mask |= msk;
 
         DEV_INFO (CH341_IF_ADDR, "%s %s gpio=%d irq=%d %s", 
                     cfg->mode == CH341_PIN_MODE_IN ? "input " : "output",
@@ -414,7 +421,7 @@ static int ch341_spi_get_status (struct ch341_device* ch341_dev)
     result = ch341_usb_transfer(ch341_dev, 1, 3);
 
     status = ((ch341_dev->in_buf[2] & 0x80) << 16) | ((ch341_dev->in_buf[1] & 0xef) << 8) | ch341_dev->in_buf[0];
-    ch341_dev->gpio_io_data = status; // these bits include current GPIO values (and more)
+    ch341_dev->gpio_io_data = (ch341_dev->gpio_io_data & ch341_dev->gpio_mask) | (~ch341_dev->gpio_mask & status); // these bits include current GPIO values (and more), only change bits not marked as outputs
 
     mutex_unlock (&ch341_lock);
 
@@ -445,6 +452,91 @@ static int ch341_spi_read_inputs (struct ch341_device* ch341_dev)
 }
 */
 
+/**
+ * A new more generalized version of write_outputs that can write ALL of the possible output pins
+ * 
+ * Based on this example code:
+ * 
+ * ********************************************************************
+ * FUNCTION : Set direction and output data of CH341 
+ * arg:
+ * Data :	Control direction and data 
+ 
+ * iEnbale : set direction and data enable
+ * 			   --> Bit16 High :	effect on Bit15~8 of iSetDataOut
+ * 			   --> Bit17 High :	effect on Bit15~8 of iSetDirOut
+ * 			   --> Bit18 High :	effect on Bit7~0 of iSetDataOut
+ * 			   --> Bit19 High :	effect on Bit7~0 of iSetDirOut
+ *			   --> Bit20 High :	effect on Bit23~16 of iSetDataOut
+ * iSetDirOut : set io direction
+ *			  -- > Bit High : Output 
+ *			  -- > Bit Low : Input
+ * iSetDataOut : set io data
+ * 			 Output:
+ *			  -- > Bit High : High level
+ *			  -- > Bit Low : Low level
+ * Note:
+ * Bit7~Bit0<==>D7-D0 
+ * Bit8<==>ERR#    Bit9<==>PEMP    Bit10<==>INT#    Bit11<==>SLCT    Bit13<==>WAIT#    Bit14<==>DATAS#/READ#    Bit15<==>ADDRS#/ADDR/ALE
+ * The pins below can only be used in output mode:
+ * Bit16<==>RESET#    Bit17<==>WRITE#    Bit18<==>SCL    Bit29<==>SDA
+ * ********************************************************************
+
+BOOL CH34xSetOutput( ULONG	iEnable, ULONG iSetDirOut, ULONG iSetDataOut)
+{
+	ULONG mLength;
+	UCHAR mBuffer[32];
+	mBuffer[0] = CH341A_CMD_SET_OUTPUT;
+	mBuffer[1] = 0x6A;
+	mBuffer[2] = (UCHAR)( iEnable & 0x1F );
+	mBuffer[3] = (UCHAR)( iSetDataOut >> 8 & 0xEF );
+	mBuffer[4] = (UCHAR)( iSetDirOut >> 8 & 0xEF | 0x10 );
+	mBuffer[5] = (UCHAR)( iSetDataOut & 0xFF );
+	mBuffer[6] = (UCHAR)( iSetDirOut & 0xFF );
+	mBuffer[7] = (UCHAR)( iSetDataOut >> 16 & 0x0F );
+	mBuffer[8] = 0;
+	mBuffer[9] = 0;
+	mBuffer[10] = 0;
+	mLength = 11;
+	if ( CH34xWriteData(  mBuffer, &mLength ) ) {  //Write Data 
+		if ( mLength >= 8 ) return( true);
+	}
+	return( false);
+}
+*/
+static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
+{
+    int result;
+    uint32_t data;
+
+    mutex_lock (&ch341_lock);
+
+    data = ch341_dev->gpio_io_data & ch341_dev->gpio_mask;
+
+    ch341_dev->out_buf[0] = CH341_CMD_SET_OUTPUT;
+    ch341_dev->out_buf[1] = 0x6a;
+    ch341_dev->out_buf[2] = 0x1f; // FIXME?
+    ch341_dev->out_buf[3] = (data >> 8) & 0xef;
+    ch341_dev->out_buf[4] = ((ch341_dev->gpio_mask >> 8) & 0xef) | 0x10;
+    ch341_dev->out_buf[5] = data & 0xff;
+    ch341_dev->out_buf[6] = ch341_dev->gpio_mask & 0xff;
+    ch341_dev->out_buf[7] = (data >> 16) & 0x0f;
+    ch341_dev->out_buf[8] = 0;
+    ch341_dev->out_buf[9] = 0;
+    ch341_dev->out_buf[10] = 0;
+
+    DEV_DBG(CH341_IF_ADDR, "mask=0x%08x data=0x%08x", ch341_dev->gpio_mask, data);
+    
+    result = ch341_usb_transfer(ch341_dev, 11, 0);
+
+    mutex_unlock (&ch341_lock);
+
+    return (result < 0) ? result : CH341_OK;
+}
+
+
+/* THis old implementation of write_outputs wrote just D0-5
+
 static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
 {
     int result;
@@ -452,13 +544,52 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
     mutex_lock (&ch341_lock);
 
     ch341_dev->out_buf[0] = CH341_CMD_UIO_STREAM;
-    ch341_dev->out_buf[1] = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask);
-    ch341_dev->out_buf[2] = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask);
+    ch341_dev->out_buf[1] = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & CH341_GPIO_OUT_MASK);
+    ch341_dev->out_buf[2] = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & CH341_GPIO_OUT_MASK);
     ch341_dev->out_buf[3] = CH341_CMD_UIO_STM_END;
 
     DEV_DBG(CH341_IF_ADDR, "mask=0x%08x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
     
     result = ch341_usb_transfer(ch341_dev, 4, 0);
+
+    mutex_unlock (&ch341_lock);
+
+    return (result < 0) ? result : CH341_OK;
+}
+*/
+
+/** NOT USED YET (possibly never)
+ * Based on example code
+ * //Init Parallel Mode
+//iMode-> 00/01 EPP
+//iMode-> 02	MEM
+static int CH34xInitParallel( unsigned char iMode, struct ch34x_pis *dev )
+{
+	int retval;
+	__u8 RequestType = VENDOR_WRITE_TYPE;
+	__u8 Request = CH34x_PARA_INIT;
+	__u16 Value = ( iMode << 8 )|( iMode < 0x00000100 ? 0x02 : 0x00 );
+	__u16 Index = 0;
+	__u16 len = 0;
+	retval = usb_control_msg( dev->udev, 
+			usb_sndctrlpipe(dev->udev, 0), Request,
+			RequestType, Value, Index, NULL, len, 1000);
+
+	return retval;
+} */
+static int ch341_init_parallel (struct ch341_device* ch341_dev)
+{
+    int result;
+
+    mutex_lock (&ch341_lock);
+
+    ch341_dev->out_buf[0] = CH341_CMD_PARA_INIT;
+    ch341_dev->out_buf[1] = 0x02;
+    ch341_dev->out_buf[2] = 0;
+
+    DEV_DBG(CH341_IF_ADDR, "init");
+    
+    result = ch341_usb_transfer(ch341_dev, 3, 0);
 
     mutex_unlock (&ch341_lock);
 
@@ -505,8 +636,8 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
         ch341_dev->gpio_io_data |= cs_bits[spi->chip_select];
 
     ch341_dev->out_buf[0]  = CH341_CMD_UIO_STREAM;
-    ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask);
-    ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask);
+    ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & 0xff);
+    ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & 0xff);
     ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
     // DEV_DBG(CH341_IF_ADDR, "mask=0x%08x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
@@ -1177,8 +1308,9 @@ void ch341_gpio_set (struct gpio_chip *chip, unsigned offset, int value)
     CHECK_PARAM (offset < ch341_dev->gpio_num);
     CHECK_PARAM (ch341_dev->gpio_pins[offset]->mode != CH341_PIN_MODE_IN);
 
-    if (value)
+    if (value) {
         ch341_dev->gpio_io_data |= ch341_dev->gpio_bits[offset];
+    }
     else
         ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[offset];
 
@@ -1202,17 +1334,22 @@ void ch341_gpio_set_multiple (struct gpio_chip *chip,
     CHECK_PARAM (mask);
     CHECK_PARAM (bits);
 
-    for (i = 0; i < ch341_dev->gpio_num; i++)
-        if ((*mask & (1 << i)) && ch341_dev->gpio_pins[i]->mode != CH341_PIN_MODE_IN) // if out or CS we will set the pin
+    for (i = 0; i < ch341_dev->gpio_num; i++) {
+        uint8_t mode = ch341_dev->gpio_pins[i]->mode;
+
+        if (*mask & (1 << i)) 
         {
-            if (*bits & (1 << i))
-                ch341_dev->gpio_io_data |= ch341_dev->gpio_bits[i];
-            else
-                ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[i];
+            if (mode != CH341_PIN_MODE_IN) // if out or CS we will set the pin
+            {
+                if (*bits & (1 << i)) 
+                    ch341_dev->gpio_io_data |= ch341_dev->gpio_bits[i];
+                else
+                    ch341_dev->gpio_io_data &= ~ch341_dev->gpio_bits[i];
+            }
         }
+    }
         
-    // DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%08x", 
-    //           *mask, *bits, ch341_dev->gpio_io_data);
+    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%08x", *mask, *bits, ch341_dev->gpio_io_data);
 
     ch341_spi_write_outputs (ch341_dev);
 
@@ -1258,7 +1395,7 @@ int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool inpu
         DEV_INFO (CH341_IF_ADDR, "no-change gpio=%s direction=%s", ch341_dev->gpio_pins[offset]->name, input ? "input" :  "output");
     }
     else {
-        // pin configured correctly if it is pin 21
+        // pin configured correctly?
         msk = 1 << ch341_dev->gpio_pins[offset]->bitNum;
         if (!(msk & ch341_dev->gpio_out_ok_mask) && !input)
         {
