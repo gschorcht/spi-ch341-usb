@@ -629,6 +629,7 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
 {
     struct ch341_device* ch341_dev;
     int result;
+    uint32_t old_gpio;
     
     CHECK_PARAM_RET (spi, -EINVAL);
     CHECK_PARAM_RET (ch341_dev = ch341_spi_maser_to_dev(spi->master), -EINVAL);
@@ -642,21 +643,31 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
         return -EINVAL;
     }
     
+    old_gpio = ch341_dev->gpio_io_data;
+
     if (active)
         ch341_dev->gpio_io_data &= ~cs_bits[spi->chip_select];
     else
         ch341_dev->gpio_io_data |= cs_bits[spi->chip_select];
 
-    ch341_dev->out_buf[0]  = CH341_CMD_UIO_STREAM;
-    ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & 0xff) | SCK_H | CH341_MOSI_MASK; // FIXME, set SCK state based on CPOL
-    ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & 0xff) | CH341_MOSI_MASK;
-    ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
+    if(ch341_dev->gpio_io_data != old_gpio) 
+    { 
+        // if no pin change, don't bother sending a USB transation
+        ch341_dev->out_buf[0]  = CH341_CMD_UIO_STREAM;
+        ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & 0xff) | SCK_H; // FIXME, set SCK state based on CPOL
+        ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & 0xff);
+        ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
-    // DEV_DBG(CH341_IF_ADDR, "mask=0x%x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
-        
-    result = ch341_usb_transfer(ch341_dev, 4, 0);
+        // DEV_DBG(CH341_IF_ADDR, "mask=0x%x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
+            
+        result = ch341_usb_transfer(ch341_dev, 4, 0);
 
-    return (result < 0) ? result : CH341_OK; 
+        return (result < 0) ? result : CH341_OK;
+    }
+    else 
+    {
+        return CH341_OK;
+    }
 }
 
 // Implementation of bit banging protocol uses following IOs to be compatible
