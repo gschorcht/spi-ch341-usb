@@ -1313,7 +1313,7 @@ int ch341_gpio_get_multiple (struct gpio_chip *chip,
             *bits |= (((ch341_dev->gpio_io_data & ch341_dev->gpio_bits[i]) ? 1 : 0) << i);
         }
 
-    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=0x%08lx io_data=0x%08x", *mask, *bits, ch341_dev->gpio_io_data);
+    // DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=0x%08lx io_data=0x%08x", *mask, *bits, ch341_dev->gpio_io_data);
 
     return CH341_OK;
 }
@@ -1371,7 +1371,7 @@ void ch341_gpio_set_multiple (struct gpio_chip *chip,
         }
     }
         
-    DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%08x", *mask, *bits, ch341_dev->gpio_io_data);
+    // DEV_DBG (CH341_IF_ADDR, "mask=%08lx bit=%08lx io_data=0x%08x", *mask, *bits, ch341_dev->gpio_io_data);
 
     ch341_spi_write_outputs (ch341_dev);
 
