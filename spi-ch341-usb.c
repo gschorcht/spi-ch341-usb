@@ -137,6 +137,14 @@ struct ch341_pin_config {
 // Which bitnums can be used as a chip select
 #define CH341_CS_OK_MASK        0x0007
 
+// the bitmqask for MISO/MOSI/SCK
+#define CH341_GPIO_SPI_MASK     0xa8
+
+// bitmask for SPI SCK
+#define SCK_H  0x08
+#define CH341_MOSI_MASK 0x20
+
+
 struct ch341_pin_config ch341_board_config[] =
 {
     // bitnum  GPIO mode           GPIO name   hwirq
@@ -421,6 +429,7 @@ static int ch341_spi_get_status (struct ch341_device* ch341_dev)
     result = ch341_usb_transfer(ch341_dev, 1, 3);
 
     status = ((ch341_dev->in_buf[2] & 0x80) << 16) | ((ch341_dev->in_buf[1] & 0xef) << 8) | ch341_dev->in_buf[0];
+    status &= ~CH341_GPIO_SPI_MASK; // Don't readback bogus SPI pin values
     ch341_dev->gpio_io_data = (ch341_dev->gpio_io_data & ch341_dev->gpio_mask) | (~ch341_dev->gpio_mask & status); // these bits include current GPIO values (and more), only change bits not marked as outputs
 
     mutex_unlock (&ch341_lock);
@@ -513,13 +522,16 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
 
     data = ch341_dev->gpio_io_data & ch341_dev->gpio_mask;
 
+    // FIXME - set idle SCK based on clock phase
+    // (spi->mode & SPI_CPOL)
+
     ch341_dev->out_buf[0] = CH341_CMD_SET_OUTPUT;
-    ch341_dev->out_buf[1] = 0x6a;
-    ch341_dev->out_buf[2] = 0x1f; // FIXME?
+    ch341_dev->out_buf[1] = 0x6a; // (data & 0xff & ~CH341_GPIO_SPI_MASK); 
+    ch341_dev->out_buf[2] = 0x1f; // (ch341_dev->gpio_mask & 0xff & ~CH341_GPIO_SPI_MASK) | SCK_H; // 0x1f; // FIXME?
     ch341_dev->out_buf[3] = (data >> 8) & 0xef;
     ch341_dev->out_buf[4] = ((ch341_dev->gpio_mask >> 8) & 0xef) | 0x10;
-    ch341_dev->out_buf[5] = data & 0xff;
-    ch341_dev->out_buf[6] = ch341_dev->gpio_mask & 0xff;
+    ch341_dev->out_buf[5] = (data & 0xff & ~CH341_GPIO_SPI_MASK); // FIXME, set SCK state based on CPOL
+    ch341_dev->out_buf[6] = (ch341_dev->gpio_mask & 0xff & ~CH341_GPIO_SPI_MASK); // Never accidentally drive the SPI signals as GPIOs
     ch341_dev->out_buf[7] = (data >> 16) & 0x0f;
     ch341_dev->out_buf[8] = 0;
     ch341_dev->out_buf[9] = 0;
@@ -636,7 +648,7 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
         ch341_dev->gpio_io_data |= cs_bits[spi->chip_select];
 
     ch341_dev->out_buf[0]  = CH341_CMD_UIO_STREAM;
-    ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & 0xff);
+    ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & 0xff); // FIXME, set SCK state based on CPOL
     ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & 0xff);
     ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
@@ -644,7 +656,7 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
         
     result = ch341_usb_transfer(ch341_dev, 4, 0);
 
-    return (result < 0) ? result : CH341_OK;
+    return (result < 0) ? result : CH341_OK; 
 }
 
 // Implementation of bit banging protocol uses following IOs to be compatible
@@ -675,7 +687,6 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
     // CPOL=1, CPHA=1   data must be stable while clock is high, can be changed while clock is low
     // mode=3           data sampled on raising clock edge
 
-    uint8_t SCK_H  = 0x08;
     uint8_t SCK_L  = 0;
     uint8_t CPOL   = (spi->mode & SPI_CPOL) ? 0x08 : 0;
     uint8_t CS_H   = cs_bits[spi->chip_select];
