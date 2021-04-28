@@ -531,7 +531,7 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
     ch341_dev->out_buf[3] = (data >> 8) & 0xef;
     ch341_dev->out_buf[4] = ((ch341_dev->gpio_mask >> 8) & 0xef) | 0x10;
     ch341_dev->out_buf[5] = (data & 0xff & ~CH341_GPIO_SPI_MASK); // FIXME, set SCK state based on CPOL
-    ch341_dev->out_buf[6] = (ch341_dev->gpio_mask & 0xff & ~CH341_GPIO_SPI_MASK); // Never accidentally drive the SPI signals as GPIOs
+    ch341_dev->out_buf[6] = (ch341_dev->gpio_mask & 0xff & ~CH341_GPIO_SPI_MASK) | SCK_H; // Never accidentally drive the SPI signals as GPIOs
     ch341_dev->out_buf[7] = (data >> 16) & 0x0f;
     ch341_dev->out_buf[8] = 0;
     ch341_dev->out_buf[9] = 0;
@@ -648,11 +648,11 @@ static int ch341_spi_set_cs (struct spi_device *spi, bool active)
         ch341_dev->gpio_io_data |= cs_bits[spi->chip_select];
 
     ch341_dev->out_buf[0]  = CH341_CMD_UIO_STREAM;
-    ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & 0xff); // FIXME, set SCK state based on CPOL
+    ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | (ch341_dev->gpio_mask & 0xff) | SCK_H; // FIXME, set SCK state based on CPOL
     ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask & 0xff);
     ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
-    // DEV_DBG(CH341_IF_ADDR, "mask=0x%08x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
+    DEV_DBG(CH341_IF_ADDR, "mask=0x%x dir=0x%02x val=0x%02x", ch341_dev->gpio_mask, ch341_dev->out_buf[1], ch341_dev->out_buf[2]);
         
     result = ch341_usb_transfer(ch341_dev, 4, 0);
 
