@@ -537,7 +537,7 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
     ch341_dev->out_buf[9] = 0;
     ch341_dev->out_buf[10] = 0;
 
-    DEV_DBG(CH341_IF_ADDR, "mask=0x%08x data=0x%08x", ch341_dev->gpio_mask, data);
+    // DEV_DBG(CH341_IF_ADDR, "mask=0x%08x data=0x%08x", ch341_dev->gpio_mask, data);
     
     result = ch341_usb_transfer(ch341_dev, 11, 0);
 
@@ -1171,8 +1171,7 @@ void ch341_gpio_read_inputs (struct ch341_device* ch341_dev)
     // read current values
     ch341_spi_get_status (ch341_dev);
 
-    if(old_io_data != ch341_dev->gpio_io_data)
-        DEV_DBG (CH341_IF_ADDR, "pins changed 0x%x, oldval 0x%x, newval 0x%x", (old_io_data ^ ch341_dev->gpio_io_data), old_io_data, ch341_dev->gpio_io_data);
+    // if(old_io_data != ch341_dev->gpio_io_data) DEV_DBG (CH341_IF_ADDR, "pins changed 0x%x, oldval 0x%x, newval 0x%x", (old_io_data ^ ch341_dev->gpio_io_data), old_io_data, ch341_dev->gpio_io_data);
 
     for (i = 0; i < ch341_dev->irq_num; i++)
     {
