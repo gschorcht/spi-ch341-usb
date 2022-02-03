@@ -1115,7 +1115,6 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
 {
     struct gpio_chip *gpio = &ch341_dev->gpio;
     int result;
-    int i, j = 0;
 
     CHECK_PARAM_RET (ch341_dev, -EINVAL);
     
@@ -1168,6 +1167,10 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
     DEV_DBG (CH341_IF_ADDR, "registered GPIOs from %d to %d", 
              gpio->base, gpio->base + gpio->ngpio - 1);
 
+    #ifdef CONFIG_GPIO_SYSFS
+    {
+    int i, j = 0;
+
     for (i = 0; i < CH341_GPIO_NUM_PINS; i++)
         // in case the pin is not a CS signal, it is an GPIO pin
         if (ch341_board_config[i].mode != CH341_PIN_MODE_CS)
@@ -1188,6 +1191,8 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
             }
             j++;
         }
+    }
+    #endif
 
     ch341_dev->gpio_thread = kthread_run (&ch341_gpio_poll_function, ch341_dev, "spi-ch341-usb-poll");
 
@@ -1198,8 +1203,6 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
 
 static void ch341_gpio_remove (struct ch341_device* ch341_dev)
 {
-    int i;
-
     CHECK_PARAM (ch341_dev);
 
     if (ch341_dev->gpio_thread)
@@ -1210,11 +1213,15 @@ static void ch341_gpio_remove (struct ch341_device* ch341_dev)
         
     if (ch341_dev->gpio.base > 0)
     {
+        #ifdef CONFIG_GPIO_SYSFS
+        int i;
+
         for (i = 0; i < ch341_dev->gpio_num; ++i)
         {
            gpio_unexport(ch341_dev->gpio.base + i);
            gpio_free(ch341_dev->gpio.base + i);
         }
+        #endif
 
         gpiochip_remove(&ch341_dev->gpio);
     }
