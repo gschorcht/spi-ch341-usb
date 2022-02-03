@@ -179,6 +179,7 @@ struct ch341_device
     bool              irq_enabled  [CH341_GPIO_NUM_PINS]; // IRQ enabled flag (irq_num elements)
     int               irq_gpio_map [CH341_GPIO_NUM_PINS]; // IRQ to GPIO pin map (irq_num elements)
     int               irq_hw;                             // IRQ for GPIO with hardware IRQ (default -1)
+    spinlock_t        irq_lock;
 };
 
 // ----- variables configurable during runtime ---------------------------
@@ -742,15 +743,18 @@ static int ch341_irq_check (struct ch341_device* ch341_dev, uint8_t irq,
     if ((type & IRQ_TYPE_EDGE_FALLING && old > new) ||
         (type & IRQ_TYPE_EDGE_RISING  && new > old))
     {
+        unsigned long flags;
         // DEV_DBG (CH341_IF_ADDR, "%s irq=%d %d %s", 
         //          hardware ? "hardware" : "software", 
         //          irq, type, (old > new) ? "falling" : "rising");
 
+        spin_lock_irqsave(&ch341_dev->irq_lock, flags);
         #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
 		handle_simple_irq (irq_data_to_desc(irq_get_irq_data(ch341_dev->irq_base + irq)));
         #else
 		handle_simple_irq (ch341_dev->irq_base+irq, irq_data_to_desc(irq_get_irq_data(ch341_dev->irq_base + irq)));
         #endif
+        spin_unlock_irqrestore(&ch341_dev->irq_lock, flags);
     }
     
     return CH341_OK;
@@ -791,6 +795,8 @@ static int ch341_irq_probe (struct ch341_device* ch341_dev)
         irq_clear_status_flags(ch341_dev->irq_base + i, IRQ_NOREQUEST | IRQ_NOPROBE);
     }
     
+    spin_lock_init(&ch341_dev->irq_lock);
+
     DEV_DBG (CH341_IF_ADDR, "done");
    
     return CH341_OK;
