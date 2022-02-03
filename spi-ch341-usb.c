@@ -659,10 +659,7 @@ static void ch341_spi_remove (struct ch341_device* ch341_dev)
             spi_unregister_device (ch341_dev->slaves[i]);
 
     if (ch341_dev->master)
-    {
         spi_unregister_master (ch341_dev->master);
-        spi_master_put (ch341_dev->master);
-    }
 
     return;
 }
