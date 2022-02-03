@@ -1173,14 +1173,18 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
         if (ch341_board_config[i].mode != CH341_PIN_MODE_CS)
         {
             // add and export the GPIO pin
-            if ((result = gpio_request(gpio->base + j, ch341_board_config[i].name)) ||
-                (result = gpio_export (gpio->base + j, ch341_board_config[i].pin != 21 ? true : false)))
+            if ((result = gpio_request(gpio->base + j, ch341_board_config[i].name)) != 0)
             {
-                DEV_ERR (CH341_IF_ADDR, "failed to export GPIO %s: %d", 
+                DEV_ERR (CH341_IF_ADDR, "failed to request GPIO %s: %d", 
                          ch341_board_config[i].name, result);
                 // reduce number of GPIOs to avoid crashes during free in case of error
                 ch341_dev->gpio_num = j ? j-1 : 0;
                 return result;
+            }
+            if ((result = gpio_export (gpio->base + j, ch341_board_config[i].pin != 21 ? true : false)) != 0)
+            {
+                DEV_ERR (CH341_IF_ADDR, "failed to export GPIO %s: %d", 
+                         ch341_board_config[i].name, result);
             }
             j++;
         }
@@ -1207,7 +1211,10 @@ static void ch341_gpio_remove (struct ch341_device* ch341_dev)
     if (ch341_dev->gpio.base > 0)
     {
         for (i = 0; i < ch341_dev->gpio_num; ++i)
+        {
+           gpio_unexport(ch341_dev->gpio.base + i);
            gpio_free(ch341_dev->gpio.base + i);
+        }
 
         gpiochip_remove(&ch341_dev->gpio);
     }
