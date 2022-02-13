@@ -140,6 +140,7 @@ struct spi_board_info ch341_spi_device_template =
 // device specific structure
 struct ch341_device 
 {
+    struct mutex mtx;
     // USB device description
     struct usb_device*    usb_dev;  // usb device
     struct usb_interface* usb_if;   // usb interface
@@ -320,15 +321,13 @@ static void ch341_cfg_remove (struct ch341_device* ch341_dev)
 
 // ----- spi layer begin -------------------------------------------------
 
-static struct mutex ch341_lock;
-
 #define ch341_spi_maser_to_dev(m) *((struct ch341_device**)spi_master_get_devdata(m))
 
 static int ch341_spi_read_inputs (struct ch341_device* ch341_dev)
 {
     int result;
 
-    mutex_lock (&ch341_lock);
+    mutex_lock (&ch341_dev->mtx);
 
     ch341_dev->out_buf[0] = CH341_CMD_UIO_STREAM;
     ch341_dev->out_buf[1] = CH341_CMD_UIO_STM_DIR | ch341_dev->gpio_mask;
@@ -340,7 +339,7 @@ static int ch341_spi_read_inputs (struct ch341_device* ch341_dev)
     ch341_dev->gpio_io_data &= ch341_dev->gpio_mask;
     ch341_dev->gpio_io_data |= ch341_dev->in_buf[0] & ~ch341_dev->gpio_mask;
 
-    mutex_unlock (&ch341_lock);
+    mutex_unlock (&ch341_dev->mtx);
 
     return (result < 0) ? result : CH341_OK;
 }
@@ -349,7 +348,7 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
 {
     int result;
 
-    mutex_lock (&ch341_lock);
+    mutex_lock (&ch341_dev->mtx);
 
     ch341_dev->out_buf[0] = CH341_CMD_UIO_STREAM;
     ch341_dev->out_buf[1] = CH341_CMD_UIO_STM_DIR | ch341_dev->gpio_mask;
@@ -360,7 +359,7 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
     
     result = ch341_usb_transfer(ch341_dev, 4, 0);
 
-    mutex_unlock (&ch341_lock);
+    mutex_unlock (&ch341_dev->mtx);
 
     return (result < 0) ? result : CH341_OK;
 }
@@ -542,7 +541,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
     
     // DEV_DBG (CH341_IF_ADDR, "");
 
-    mutex_lock (&ch341_lock);
+    mutex_lock (&ch341_dev->mtx);
 
     // use slow bitbang implementation for SPI_MODE_1, SPI_MODE_2 and SPI_MODE_3
     if (spi->mode & SPI_MODE_3)
@@ -578,7 +577,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
 
     spi_finalize_current_transfer(master);
 
-    mutex_unlock (&ch341_lock);
+    mutex_unlock (&ch341_dev->mtx);
 
     return result;
 }
@@ -642,7 +641,7 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
         }
     }
 
-    mutex_init (&ch341_lock);
+    mutex_init (&ch341_dev->mtx);
 
     DEV_DBG (CH341_IF_ADDR, "done");
 
