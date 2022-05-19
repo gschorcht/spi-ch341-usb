@@ -537,7 +537,7 @@ static int ch341_spi_transfer_one(struct spi_master *master,
     CHECK_PARAM_RET (master   , EIO)
     CHECK_PARAM_RET (spi      , EIO)
     CHECK_PARAM_RET (t        , EIO); 
-    CHECK_PARAM_RET (t->len <= CH341_USB_MAX_BULK_SIZE, EIO);
+    CHECK_PARAM_RET (t->len <= CH341_USB_MAX_BULK_SIZE-1, EIO);
     
     // DEV_DBG (CH341_IF_ADDR, "");
 
