@@ -531,13 +531,14 @@ static int ch341_spi_transfer_one(struct spi_master *master,
     uint8_t* rx;
     bool lsb; 
     int result = 0;
+    int bytes_left = t->len;
+    int bytes_to_copy;
     int i;
 
     CHECK_PARAM_RET (ch341_dev, EIO);
     CHECK_PARAM_RET (master   , EIO)
     CHECK_PARAM_RET (spi      , EIO)
     CHECK_PARAM_RET (t        , EIO); 
-    CHECK_PARAM_RET (t->len <= CH341_USB_MAX_BULK_SIZE-1, EIO);
     
     // DEV_DBG (CH341_IF_ADDR, "");
 
@@ -560,25 +561,52 @@ static int ch341_spi_transfer_one(struct spi_master *master,
             ch341_spi_set_cs (spi, true);
         }
 
-        // fill output buffer with command and output data, controller expects lsb first
-        ch341_dev->out_buf[0] = CH341_CMD_SPI_STREAM;
-        for (i = 0; i < t->len; i++)
-            ch341_dev->out_buf[i+1] = lsb ? tx[i] : ch341_spi_swap_byte(tx[i]);
-
-        // transfer output and input data
-        result = ch341_usb_transfer(ch341_dev, t->len + 1, t->len);
-
-        if (!(spi->mode & SPI_NO_CS))
+        while (bytes_left)
         {
-            // deactivate cs
-            ch341_spi_set_cs (spi, false);
+            bytes_to_copy = min(bytes_left, CH341_USB_MAX_BULK_SIZE-1);
+
+            // fill output buffer with command and output data, controller expects lsb first
+            ch341_dev->out_buf[0] = CH341_CMD_SPI_STREAM;
+            if (lsb) {
+                for (i = 0; i < bytes_to_copy; i++)
+                    ch341_dev->out_buf[i+1] = ch341_spi_swap_byte(tx[i]);
+            } else {
+                memcpy(ch341_dev->out_buf + 1, tx, bytes_to_copy);
+            }
+            tx += bytes_to_copy;
+
+            // transfer output and input data
+            result = ch341_usb_transfer(ch341_dev, bytes_to_copy + 1, bytes_to_copy);
+
+            if (!(spi->mode & SPI_NO_CS))
+            {
+                // deactivate cs
+                ch341_spi_set_cs (spi, false);
+            }
+
+            if (result < 0)
+                break;
+
+            if (result != bytes_to_copy) {
+                result = -EIO;
+                break;
+            }
+
+            if (rx)
+            {
+                // fill input data with input buffer, controller delivers lsb first
+                if (lsb) {
+                    for (i = 0; i < bytes_to_copy; i++)
+                        rx[i] = ch341_spi_swap_byte(ch341_dev->in_buf[i]);
+                } else {
+                    memcpy(rx, ch341_dev->in_buf, bytes_to_copy);
+                }
+                rx += bytes_to_copy;
+            }
+
+            bytes_left -= bytes_to_copy;
+            result = 0;
         }
-
-        // fill input data with input buffer, controller delivers lsb first
-        if (result >= 0 && rx)
-            for (i = 0; i < t->len; i++)
-                rx[i] = lsb ? ch341_dev->in_buf[i] : ch341_spi_swap_byte(ch341_dev->in_buf[i]);
-
     }
 
     spi_finalize_current_transfer(master);
