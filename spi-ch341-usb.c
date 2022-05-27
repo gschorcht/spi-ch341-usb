@@ -525,91 +525,87 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
     return 0;
 }
 
+static int ch341_spi_native(struct ch341_device *ch341_dev,
+                            struct spi_device *spi,
+                            const uint8_t *tx, uint8_t *rx, int len)
+{
+    bool lsb = spi->mode & SPI_LSB_FIRST;
+    int bytes_to_copy;
+    int result = 0;
+    int i;
+
+    if (!(spi->mode & SPI_NO_CS)) {
+        ch341_spi_set_cs (spi, true);
+    }
+
+    while (len)
+    {
+        bytes_to_copy = min(len, CH341_USB_MAX_BULK_SIZE-1);
+
+        // fill output buffer with command and output data, controller expects lsb first
+        ch341_dev->out_buf[0] = CH341_CMD_SPI_STREAM;
+        if (lsb) {
+            memcpy(ch341_dev->out_buf + 1, tx, bytes_to_copy);
+        } else {
+            for (i = 0; i < bytes_to_copy; i++)
+                ch341_dev->out_buf[i+1] = ch341_spi_swap_byte(tx[i]);
+        }
+        tx += bytes_to_copy;
+
+        result = ch341_usb_transfer(ch341_dev, bytes_to_copy + 1, bytes_to_copy);
+
+        if (result < 0) {
+            break;
+        }
+
+        if (result != bytes_to_copy) {
+            result = -EIO;
+            break;
+        }
+
+        if (rx)
+        {
+            // fill input data with input buffer, controller delivers lsb first
+            if (lsb) {
+                memcpy(rx, ch341_dev->in_buf, bytes_to_copy);
+            } else {
+                for (i = 0; i < bytes_to_copy; i++)
+                    rx[i] = ch341_spi_swap_byte(ch341_dev->in_buf[i]);
+            }
+            rx += bytes_to_copy;
+        }
+
+        len -= bytes_to_copy;
+        result = 0;
+    }
+
+    if (!(spi->mode & SPI_NO_CS)) {
+            ch341_spi_set_cs (spi, false);
+    }
+
+    return result;
+}
+
 static int ch341_spi_transfer_one(struct spi_master *master,
                                   struct spi_device *spi, 
                                   struct spi_transfer* t)
 {
     struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->master);
-    const uint8_t* tx;
-    uint8_t* rx;
-    bool lsb; 
-    int result = 0;
-    int bytes_left = t->len;
-    int bytes_to_copy;
-    int i;
+    int result;
 
     CHECK_PARAM_RET (ch341_dev, EIO);
     CHECK_PARAM_RET (master   , EIO)
     CHECK_PARAM_RET (spi      , EIO)
-    CHECK_PARAM_RET (t        , EIO); 
-    
-    // DEV_DBG (CH341_IF_ADDR, "");
+    CHECK_PARAM_RET (t        , EIO);
 
     mutex_lock (&ch341_dev->mtx);
 
-    // use slow bitbang implementation for SPI_MODE_1, SPI_MODE_2 and SPI_MODE_3
-    if (spi->mode & SPI_MODE_3)
-        result = ch341_spi_bitbang (ch341_dev, spi, t->tx_buf, t->rx_buf, t->len);
-
-    // otherwise the faster hardware implementation    
-    else
-    {
-        lsb = spi->mode & SPI_LSB_FIRST;
-        tx  = t->tx_buf;
-        rx  = t->rx_buf;
-
-        if (!(spi->mode & SPI_NO_CS))
-        {
-            // activate cs
-            ch341_spi_set_cs (spi, true);
-        }
-
-        while (bytes_left)
-        {
-            bytes_to_copy = min(bytes_left, CH341_USB_MAX_BULK_SIZE-1);
-
-            // fill output buffer with command and output data, controller expects lsb first
-            ch341_dev->out_buf[0] = CH341_CMD_SPI_STREAM;
-            if (lsb) {
-                memcpy(ch341_dev->out_buf + 1, tx, bytes_to_copy);
-            } else {
-                for (i = 0; i < bytes_to_copy; i++)
-                    ch341_dev->out_buf[i+1] = ch341_spi_swap_byte(tx[i]);
-            }
-            tx += bytes_to_copy;
-
-            // transfer output and input data
-            result = ch341_usb_transfer(ch341_dev, bytes_to_copy + 1, bytes_to_copy);
-
-            if (!(spi->mode & SPI_NO_CS))
-            {
-                // deactivate cs
-                ch341_spi_set_cs (spi, false);
-            }
-
-            if (result < 0)
-                break;
-
-            if (result != bytes_to_copy) {
-                result = -EIO;
-                break;
-            }
-
-            if (rx)
-            {
-                // fill input data with input buffer, controller delivers lsb first
-                if (lsb) {
-                    memcpy(rx, ch341_dev->in_buf, bytes_to_copy);
-                } else {
-                    for (i = 0; i < bytes_to_copy; i++)
-                        rx[i] = ch341_spi_swap_byte(ch341_dev->in_buf[i]);
-                }
-                rx += bytes_to_copy;
-            }
-
-            bytes_left -= bytes_to_copy;
-            result = 0;
-        }
+    if (spi->mode & SPI_MODE_3) {
+        // use slow bitbang implementation for SPI_MODE_1, SPI_MODE_2 and SPI_MODE_3
+        result = ch341_spi_bitbang(ch341_dev, spi, t->tx_buf, t->rx_buf, t->len);
+    } else {
+        // otherwise the faster hardware implementation
+        result = ch341_spi_native(ch341_dev, spi, t->tx_buf, t->rx_buf, t->len);
     }
 
     spi_finalize_current_transfer(master);
