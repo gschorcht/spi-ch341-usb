@@ -568,10 +568,10 @@ static int ch341_spi_transfer_one(struct spi_master *master,
             // fill output buffer with command and output data, controller expects lsb first
             ch341_dev->out_buf[0] = CH341_CMD_SPI_STREAM;
             if (lsb) {
+                memcpy(ch341_dev->out_buf + 1, tx, bytes_to_copy);
+            } else {
                 for (i = 0; i < bytes_to_copy; i++)
                     ch341_dev->out_buf[i+1] = ch341_spi_swap_byte(tx[i]);
-            } else {
-                memcpy(ch341_dev->out_buf + 1, tx, bytes_to_copy);
             }
             tx += bytes_to_copy;
 
@@ -596,10 +596,10 @@ static int ch341_spi_transfer_one(struct spi_master *master,
             {
                 // fill input data with input buffer, controller delivers lsb first
                 if (lsb) {
+                    memcpy(rx, ch341_dev->in_buf, bytes_to_copy);
+                } else {
                     for (i = 0; i < bytes_to_copy; i++)
                         rx[i] = ch341_spi_swap_byte(ch341_dev->in_buf[i]);
-                } else {
-                    memcpy(rx, ch341_dev->in_buf, bytes_to_copy);
                 }
                 rx += bytes_to_copy;
             }
