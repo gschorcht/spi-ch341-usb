@@ -457,7 +457,10 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
 
     // mask SPI GPIO data
     DATA &= ~MOSI_H & ~SCK_H & ~CS_H;
-    
+
+    if (spi->mode & SPI_NO_CS)
+        CS_L = CS_H;
+
     k = 0;
     io[k++] = CH341_CMD_UIO_STREAM;
     io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | CPOL; // set defaults CS#=HIGH, SCK=CPOL
