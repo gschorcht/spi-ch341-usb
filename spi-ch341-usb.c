@@ -379,38 +379,35 @@ static uint8_t ch341_spi_swap_byte(const uint8_t byte)
     return swap;
 }
 
-static const int cs_bits[CH341_SPI_MAX_NUM_DEVICES] = { 0x01, 0x02, 0x04 };
-
-static int ch341_spi_set_cs (struct spi_device *spi, bool active)
+static void ch341_spi_update_io_data(struct ch341_device *ch341_dev)
 {
-    struct ch341_device* ch341_dev;
-    int result;
-    
-    CHECK_PARAM_RET (spi, -EINVAL);
-    CHECK_PARAM_RET (ch341_dev = ch341_spi_maser_to_dev(spi->master), -EINVAL);
-
-    // DEV_DBG (CH341_IF_ADDR, "active %s", active ? "true" : "false");
-
-    if (spi->chip_select > CH341_SPI_MAX_NUM_DEVICES)
-    {
-        DEV_ERR (CH341_IF_ADDR, "invalid CS value %d, 0~%d are available", 
-                 spi->chip_select, CH341_SPI_MAX_NUM_DEVICES-1);
-        return -EINVAL;
-    }
-    
-    if (active)
-        ch341_dev->gpio_io_data &= ~cs_bits[spi->chip_select];
-    else
-        ch341_dev->gpio_io_data |= cs_bits[spi->chip_select];
-
     ch341_dev->out_buf[0]  = CH341_CMD_UIO_STREAM;
     ch341_dev->out_buf[1]  = CH341_CMD_UIO_STM_DIR | ch341_dev->gpio_mask;
     ch341_dev->out_buf[2]  = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask);
     ch341_dev->out_buf[3]  = CH341_CMD_UIO_STM_END;
 
-    result = ch341_usb_transfer(ch341_dev, 4, 0);
-        
-    return (result < 0) ? result : CH341_OK;
+    ch341_usb_transfer(ch341_dev, 4, 0);
+}
+
+static void ch341_spi_set_cs(struct spi_device *spi, bool active)
+{
+    struct ch341_device *ch341_dev = ch341_spi_maser_to_dev(spi->master);
+
+    if (spi->mode & SPI_NO_CS)
+        return;
+
+    if (spi->chip_select > CH341_SPI_MAX_NUM_DEVICES)
+    {
+        DEV_ERR (CH341_IF_ADDR, "invalid CS value %d, 0~%d are available", 
+                 spi->chip_select, CH341_SPI_MAX_NUM_DEVICES-1);
+    }
+
+    if (active)
+        ch341_dev->gpio_io_data &= ~(1 << spi->chip_select);
+    else
+        ch341_dev->gpio_io_data |= (1 << spi->chip_select);
+
+    ch341_spi_update_io_data(ch341_dev);
 }
 
 // Implementation of bit banging protocol uses following IOs to be compatible
@@ -444,8 +441,7 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
     uint8_t SCK_H  = 0x08;
     uint8_t SCK_L  = 0;
     uint8_t CPOL   = (spi->mode & SPI_CPOL) ? 0x08 : 0;
-    uint8_t CS_H   = cs_bits[spi->chip_select];
-    uint8_t CS_L   = 0;
+    uint8_t CS_H   = (1 << spi->chip_select);
     uint8_t MOSI_H = 0x20;
     uint8_t MASK   = ch341_dev->gpio_mask;
     uint8_t DATA   = ch341_dev->gpio_io_data & ch341_dev->gpio_mask;
@@ -458,14 +454,10 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
     // mask SPI GPIO data
     DATA &= ~MOSI_H & ~SCK_H & ~CS_H;
 
-    if (spi->mode & SPI_NO_CS)
-        CS_L = CS_H;
-
     k = 0;
     io[k++] = CH341_CMD_UIO_STREAM;
     io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | CPOL; // set defaults CS#=HIGH, SCK=CPOL
     io[k++] = CH341_CMD_UIO_STM_DIR | MASK;               // input: MISO, IN2; output MOSI, OUT2, SCK, CS#;
-    io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_L | CPOL; // start with CS0=LOW, SCK=CPOL
     io[k++] = CH341_CMD_UIO_STM_END;
     if ((result = ch341_usb_transfer(ch341_dev, k, 0)) < 0)
         return result;
@@ -483,18 +475,18 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
             
             if (mode == SPI_MODE_0 || mode == SPI_MODE_3)
             {
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_L | SCK_L | bit; // keep CS0=LOW, set SCK=LOW , set MOSI
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_L | SCK_H | bit; // keep CS0=LOW, set SCK=HIGH, keep MOSI
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_L | bit; // set SCK=LOW , set MOSI
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_H | bit; // set SCK=HIGH, keep MOSI
                 io[k++] = CH341_CMD_UIO_STM_IN; // read MISO
             }
             else
             {
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_L | SCK_L | bit; // keep CS0=LOW, set SCK=HIGH, set MOSI
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_L | SCK_H | bit; // keep CS0=LOW, set SCK=LOW , keep MOSI
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_L | bit; // set SCK=HIGH, set MOSI
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_H | bit; // set SCK=LOW , keep MOSI
                 io[k++] = CH341_CMD_UIO_STM_IN; // read MISO
             }
         }
-        io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_L | CPOL; // keep CS0=LOW, SCK=CPOL, MOSI=LOW
+        io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | CPOL; // SCK=CPOL, MOSI=LOW
         io[k++] = CH341_CMD_UIO_STM_END;
         if ((result = ch341_usb_transfer(ch341_dev, k, 8)) < 0)
             return result;
@@ -533,10 +525,6 @@ static int ch341_spi_native(struct ch341_device *ch341_dev,
     int bytes_to_copy;
     int result = 0;
     int i;
-
-    if (!(spi->mode & SPI_NO_CS)) {
-        ch341_spi_set_cs (spi, true);
-    }
 
     while (len)
     {
@@ -579,26 +567,18 @@ static int ch341_spi_native(struct ch341_device *ch341_dev,
         result = 0;
     }
 
-    if (!(spi->mode & SPI_NO_CS)) {
-            ch341_spi_set_cs (spi, false);
-    }
-
     return result;
 }
 
-static int ch341_spi_transfer_one(struct spi_master *master,
+static int ch341_spi_transfer_one(struct ch341_device* ch341_dev,
                                   struct spi_device *spi, 
                                   struct spi_transfer* t)
 {
-    struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->master);
     int result;
 
     CHECK_PARAM_RET (ch341_dev, EIO);
-    CHECK_PARAM_RET (master   , EIO)
     CHECK_PARAM_RET (spi      , EIO)
     CHECK_PARAM_RET (t        , EIO);
-
-    mutex_lock (&ch341_dev->mtx);
 
     if (spi->mode & SPI_MODE_3) {
         // use slow bitbang implementation for SPI_MODE_1, SPI_MODE_2 and SPI_MODE_3
@@ -608,11 +588,64 @@ static int ch341_spi_transfer_one(struct spi_master *master,
         result = ch341_spi_native(ch341_dev, spi, t->tx_buf, t->rx_buf, t->len);
     }
 
-    spi_finalize_current_transfer(master);
-
-    mutex_unlock (&ch341_dev->mtx);
-
     return result;
+}
+
+static int ch341_spi_transfer_one_message(struct spi_controller *ctlr,
+                                          struct spi_message *msg)
+{
+    struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(ctlr);
+    struct spi_transfer *xfer;
+    bool keep_cs = false;
+    int ret = 0;
+
+    mutex_lock(&ch341_dev->mtx);
+
+    ch341_spi_set_cs(msg->spi, true);
+
+    list_for_each_entry(xfer, &msg->transfers, transfer_list)
+    {
+        if ((xfer->tx_buf || xfer->rx_buf) && xfer->len) {
+            reinit_completion(&ctlr->xfer_completion);
+
+            ret = ch341_spi_transfer_one(ch341_dev, msg->spi, xfer);
+            if (ret < 0) {
+                dev_err(&msg->spi->dev, "SPI transfer failed: %d\n", ret);
+                goto out;
+            }
+        } else {
+            if (xfer->len)
+                dev_err(&msg->spi->dev, "Bufferless transfer has length %u\n", xfer->len);
+        }
+
+        spi_transfer_delay_exec(xfer);
+
+        if (xfer->cs_change) {
+            if (list_is_last(&xfer->transfer_list, &msg->transfers)) {
+                    keep_cs = true;
+            } else {
+                ch341_spi_set_cs(msg->spi, false);
+//                _spi_transfer_cs_change_delay(msg, xfer);
+                udelay(10);
+                ch341_spi_set_cs(msg->spi, true);
+            }
+        }
+
+        msg->actual_length += xfer->len;
+    }
+
+out:
+    if (ret != 0 || !keep_cs)
+        ch341_spi_set_cs(msg->spi, false);
+
+    mutex_unlock(&ch341_dev->mtx);
+
+    if (msg->status == -EINPROGRESS)
+        msg->status = ret;
+
+    spi_finalize_current_message(ctlr);
+
+    return ret;
 }
 
 
@@ -646,7 +679,7 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     #else
     ch341_dev->master->bits_per_word_mask = SPI_BPW_MASK(8);
     #endif
-    ch341_dev->master->transfer_one = ch341_spi_transfer_one;
+    ch341_dev->master->transfer_one_message = ch341_spi_transfer_one_message;
     ch341_dev->master->max_speed_hz = CH341_SPI_MAX_FREQ;
     ch341_dev->master->min_speed_hz = CH341_SPI_MIN_FREQ;
 
@@ -662,6 +695,8 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
 
     DEV_INFO (CH341_IF_ADDR, "SPI master connected to SPI bus %d", ch341_dev->master->bus_num);
 
+    mutex_lock(&ch341_dev->mtx);
+
     // create SPI slaves
     for (i = 0; i < ch341_dev->slave_num; i++)
     {
@@ -671,10 +706,12 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
             DEV_INFO (CH341_IF_ADDR, "SPI device /dev/spidev%d.%d created", 
                       ch341_dev->master->bus_num, ch341_spi_devices[i].chip_select);
             ch341_spi_set_cs (ch341_dev->slaves[i], false);
+            ch341_dev->gpio_io_data |= (1 << ch341_spi_devices[i].chip_select);
         }
     }
+    ch341_spi_update_io_data(ch341_dev);
 
-    mutex_init (&ch341_dev->mtx);
+    mutex_unlock(&ch341_dev->mtx);
 
     DEV_DBG (CH341_IF_ADDR, "done");
 
@@ -1285,7 +1322,6 @@ static int ch341_usb_transfer(struct ch341_device *ch341_dev, int out_len, int i
 
     // DEV_DBG (CH341_IF_ADDR, "bulk_out %d bytes, bulk_in %d bytes", 
     //          out_len, (in_len == 0) ? 0 : CH341_USB_MAX_BULK_SIZE);
-
     retval = usb_bulk_msg(ch341_dev->usb_dev, 
                           usb_sndbulkpipe(ch341_dev->usb_dev,
                                           usb_endpoint_num(ch341_dev->ep_out)),
@@ -1407,7 +1443,9 @@ static int ch341_usb_probe (struct usb_interface* usb_if,
 
     // save the pointer to the new ch341_device in USB interface device data
     usb_set_intfdata(usb_if, ch341_dev);
-    
+
+    mutex_init (&ch341_dev->mtx);
+
     if ((error = ch341_cfg_probe (ch341_dev)) ||  // initialize board configuration    
         (error = ch341_spi_probe (ch341_dev)) ||  // initialize SPI master and slaves
         (error = ch341_irq_probe (ch341_dev)) ||  // initialize IRQs
