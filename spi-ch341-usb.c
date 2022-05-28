@@ -94,6 +94,10 @@
 
 #define CH341_OK                    0
 
+#define SCK_BIT        (1 << 3)
+#define MOSI_BIT       (1 << 5)
+#define MISO_BIT       (1 << 7)
+
 /**
  *  
  *  Change the default values in *ch341_board_config* for your configuraton
@@ -355,8 +359,6 @@ static int ch341_spi_write_outputs (struct ch341_device* ch341_dev)
     ch341_dev->out_buf[2] = CH341_CMD_UIO_STM_OUT | (ch341_dev->gpio_io_data & ch341_dev->gpio_mask);
     ch341_dev->out_buf[3] = CH341_CMD_UIO_STM_END;
 
-    // DEV_DBG(CH341_IF_ADDR, "%02x", ch341_dev->out_buf[2]);
-    
     result = ch341_usb_transfer(ch341_dev, 4, 0);
 
     mutex_unlock (&ch341_dev->mtx);
@@ -438,12 +440,10 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
     // CPOL=1, CPHA=1   data must be stable while clock is high, can be changed while clock is low
     // mode=3           data sampled on raising clock edge
 
-    uint8_t SCK_H  = 0x08;
+    uint8_t SCK_H  = SCK_BIT;
     uint8_t SCK_L  = 0;
-    uint8_t CPOL   = (spi->mode & SPI_CPOL) ? 0x08 : 0;
-    uint8_t CS_H   = (1 << spi->chip_select);
-    uint8_t MOSI_H = 0x20;
-    uint8_t MASK   = ch341_dev->gpio_mask;
+    uint8_t CPOL   = (spi->mode & SPI_CPOL) ? SCK_BIT : 0;
+    uint8_t CS_MASK= ch341_dev->gpio_io_data & ((1 << ch341_dev->slave_num) - 1);
     uint8_t DATA   = ch341_dev->gpio_io_data & ch341_dev->gpio_mask;
 
     uint8_t mode = spi->mode & SPI_MODE_3;
@@ -452,16 +452,8 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
     // DEV_DBG (CH341_IF_ADDR, "start");
 
     // mask SPI GPIO data
-    DATA &= ~MOSI_H & ~SCK_H & ~CS_H;
+    DATA &= ~MOSI_BIT & ~SCK_BIT & ~CS_MASK;
 
-    k = 0;
-    io[k++] = CH341_CMD_UIO_STREAM;
-    io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | CPOL; // set defaults CS#=HIGH, SCK=CPOL
-    io[k++] = CH341_CMD_UIO_STM_DIR | MASK;               // input: MISO, IN2; output MOSI, OUT2, SCK, CS#;
-    io[k++] = CH341_CMD_UIO_STM_END;
-    if ((result = ch341_usb_transfer(ch341_dev, k, 0)) < 0)
-        return result;
-    
     for (b = 0; b < len; b++)
     {
         k = 0;
@@ -470,23 +462,22 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
         byte = lsb ? ch341_spi_swap_byte(tx[b]) : tx[b];
         for (i = 0; i < 8; i++)
         {
-            bit = byte & 0x80 ? 0x20 : 0;  // lsb
-            byte = byte << 1;
-            
+            bit = byte & 0x80 ? MOSI_BIT : 0;  // lsb
+            byte <<= 1;
+
             if (mode == SPI_MODE_0 || mode == SPI_MODE_3)
             {
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_L | bit; // set SCK=LOW , set MOSI
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_H | bit; // set SCK=HIGH, keep MOSI
-                io[k++] = CH341_CMD_UIO_STM_IN; // read MISO
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_MASK | SCK_L | bit; // set SCK=LOW , set MOSI
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_MASK | SCK_H | bit; // set SCK=HIGH, keep MOSI
             }
             else
             {
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_L | bit; // set SCK=HIGH, set MOSI
-                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | SCK_H | bit; // set SCK=LOW , keep MOSI
-                io[k++] = CH341_CMD_UIO_STM_IN; // read MISO
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_MASK | SCK_H | bit; // set SCK=HIGH, set MOSI
+                io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_MASK | SCK_L | bit; // set SCK=LOW , keep MOSI
             }
+            io[k++] = CH341_CMD_UIO_STM_IN; // read MISO
         }
-        io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | CPOL; // SCK=CPOL, MOSI=LOW
+        io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_MASK | CPOL; // SCK=CPOL, MOSI=LOW
         io[k++] = CH341_CMD_UIO_STM_END;
         if ((result = ch341_usb_transfer(ch341_dev, k, 8)) < 0)
             return result;
@@ -495,23 +486,11 @@ static int ch341_spi_bitbang (struct ch341_device* ch341_dev,
         for (i = 0; i < 8; i++)
         {
             byte = byte << 1;
-            byte = byte | ((ch341_dev->in_buf[i] & 0x80) ? 1 : 0);
+            byte = byte | ((ch341_dev->in_buf[i] & MISO_BIT) ? 1 : 0);
         }
         rx[b] =  lsb ? ch341_spi_swap_byte(byte) : byte;
     }
-    
-    k = 0;
-    io[k++] = CH341_CMD_UIO_STREAM;
-    io[k++] = CH341_CMD_UIO_STM_OUT | DATA | CS_H | CPOL; // default status: CS#=HIGH, SCK=CPOL
-    io[k++] = CH341_CMD_UIO_STM_END;
-    if ((result = ch341_usb_transfer(ch341_dev, k, 0)) < 0)
-        return result;
 
-    // save last I/O data byte
-    DATA  = ch341_dev->gpio_io_data;
-    DATA &= ~MOSI_H & ~SCK_H & ~CS_H;
-    DATA |= CS_H | CPOL;
-    
     // DEV_DBG (CH341_IF_ADDR, "done");
 
     return 0;
@@ -649,6 +628,31 @@ out:
 }
 
 
+static int ch341_spi_setup(struct spi_device *spi)
+{
+    struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->controller);
+    uint8_t CS_MASK = (1 << spi->chip_select);
+    uint8_t CPOL = (spi->mode & SPI_CPOL) ? SCK_BIT : 0;
+    uint8_t test_mask = CS_MASK | SCK_BIT;
+    uint8_t old_data;
+    uint8_t new_data;
+
+    mutex_lock(&ch341_dev->mtx);
+
+    old_data = ch341_dev->gpio_io_data & test_mask;
+    new_data = CPOL | CS_MASK;
+
+    if (new_data != old_data) {
+        ch341_dev->gpio_io_data &= ~test_mask;
+        ch341_dev->gpio_io_data |= new_data;
+        ch341_spi_update_io_data(ch341_dev);
+    }
+
+    mutex_unlock(&ch341_dev->mtx);
+
+    return 0;
+}
+
 static int ch341_spi_probe (struct ch341_device* ch341_dev)
 {
     int result;
@@ -680,6 +684,7 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     ch341_dev->master->bits_per_word_mask = SPI_BPW_MASK(8);
     #endif
     ch341_dev->master->transfer_one_message = ch341_spi_transfer_one_message;
+    ch341_dev->master->setup = ch341_spi_setup;
     ch341_dev->master->max_speed_hz = CH341_SPI_MAX_FREQ;
     ch341_dev->master->min_speed_hz = CH341_SPI_MIN_FREQ;
 
@@ -696,6 +701,9 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     DEV_INFO (CH341_IF_ADDR, "SPI master connected to SPI bus %d", ch341_dev->master->bus_num);
 
     mutex_lock(&ch341_dev->mtx);
+    ch341_dev->gpio_io_data |= (1 << ch341_dev->slave_num) - 1;
+    ch341_spi_update_io_data(ch341_dev);
+    mutex_unlock(&ch341_dev->mtx);
 
     // create SPI slaves
     for (i = 0; i < ch341_dev->slave_num; i++)
@@ -705,13 +713,8 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
         {
             DEV_INFO (CH341_IF_ADDR, "SPI device /dev/spidev%d.%d created", 
                       ch341_dev->master->bus_num, ch341_spi_devices[i].chip_select);
-            ch341_spi_set_cs (ch341_dev->slaves[i], false);
-            ch341_dev->gpio_io_data |= (1 << ch341_spi_devices[i].chip_select);
         }
     }
-    ch341_spi_update_io_data(ch341_dev);
-
-    mutex_unlock(&ch341_dev->mtx);
 
     DEV_DBG (CH341_IF_ADDR, "done");
 
