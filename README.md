@@ -261,6 +261,16 @@ int status = ioctl (spi, SPI_IOC_MESSAGE(1), &spi_trans);
 // use input data in miso
 ```
 
+### Attaching SPI NOR flash as MTD
+
+E.g. flash IC is attached to bus 0 chip 0 (spi0.0):
+
+```
+# echo spi0.0 > /sys/bus/spi/drivers/spidev/unbind
+# echo spi-nor > /sys/bus/spi/devices/spi0.0/driver_override
+# echo spi0.0 > /sys/bus/spi/drivers/spi-nor/bind
+```
+
 ### Using GPIOs
 
 On systems with GPIO character device support (CONFIG_GPIO_CDEV) GPIO pins are available via ```/dev/gpiochipN``` character device.
