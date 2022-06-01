@@ -163,6 +163,7 @@ struct ch341_device
     struct spi_master*  master;   // spi master
     struct spi_device*  slaves[CH341_SPI_MAX_NUM_DEVICES];
     int                 slave_num;
+    bool                last_cpol; // last message CPOL
 
     // GPIO device description
     struct gpio_chip         gpio;                              // chip descriptor for GPIOs
@@ -576,9 +577,17 @@ static int ch341_spi_transfer_one_message(struct spi_controller *ctlr,
     struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(ctlr);
     struct spi_transfer *xfer;
     bool keep_cs = false;
+    bool cpol = msg->spi->mode & SPI_CPOL;
     int ret = 0;
 
     mutex_lock(&ch341_dev->mtx);
+
+    if (ch341_dev->last_cpol != cpol) {
+        ch341_dev->last_cpol = cpol;
+        ch341_dev->gpio_io_data = (ch341_dev->gpio_io_data & ~SCK_BIT) |
+                                  (cpol ? SCK_BIT : 0);
+        ch341_spi_update_io_data(ch341_dev);
+    }
 
     ch341_spi_set_cs(msg->spi, true);
 
@@ -631,20 +640,12 @@ out:
 static int ch341_spi_setup(struct spi_device *spi)
 {
     struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->controller);
-    uint8_t CS_MASK = (1 << spi->chip_select);
-    uint8_t CPOL = (spi->mode & SPI_CPOL) ? SCK_BIT : 0;
-    uint8_t test_mask = CS_MASK | SCK_BIT;
-    uint8_t old_data;
-    uint8_t new_data;
+    uint8_t cs_mask = (1 << spi->chip_select);
 
     mutex_lock(&ch341_dev->mtx);
 
-    old_data = ch341_dev->gpio_io_data & test_mask;
-    new_data = CPOL | CS_MASK;
-
-    if (new_data != old_data) {
-        ch341_dev->gpio_io_data &= ~test_mask;
-        ch341_dev->gpio_io_data |= new_data;
+    if (!(ch341_dev->gpio_io_data & cs_mask)) {
+        ch341_dev->gpio_io_data |= cs_mask;
         ch341_spi_update_io_data(ch341_dev);
     }
 
