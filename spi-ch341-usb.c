@@ -916,14 +916,6 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     
     DEV_DBG (CH341_IF_ADDR, "start");
 
-    // search for next free bus number
-    while ((ch341_dev->master = spi_busnum_to_master(bus)))
-    { 
-        // returns a refcounted pointer to an existing master
-        spi_master_put (ch341_dev->master);
-        bus++;
-    }
-
     // allocate a new SPI master with a pointer to ch341_device as device data
     ch341_dev->master = spi_alloc_master(CH341_IF_ADDR, sizeof(struct ch341_device*));
     if (!ch341_dev->master)
@@ -935,10 +927,8 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     // save the pointer to ch341_dev in the SPI master device data field
     ch341_spi_maser_to_dev (ch341_dev->master) = ch341_dev;
 
-    DEV_INFO (CH341_IF_ADDR, "SPI master connected to SPI bus %d", bus);
-
     // set SPI master configuration
-    ch341_dev->master->bus_num = bus;
+    ch341_dev->master->bus_num = -1;
     ch341_dev->master->num_chipselect = CH341_SPI_MAX_NUM_DEVICES;
     ch341_dev->master->mode_bits = SPI_MODE_3 | SPI_LSB_FIRST;
     ch341_dev->master->flags = SPI_MASTER_MUST_RX | SPI_MASTER_MUST_TX;
@@ -966,11 +956,11 @@ static int ch341_spi_probe (struct ch341_device* ch341_dev)
     // create SPI slaves
     for (i = 0; i < ch341_dev->slave_num; i++)
     {
-        ch341_spi_devices[i].bus_num = bus;
+        ch341_spi_devices[i].bus_num = ch341_dev->master->bus_num;
         if ((ch341_dev->slaves[i] = spi_new_device(ch341_dev->master, &ch341_spi_devices[i])))
         {
             DEV_INFO (CH341_IF_ADDR, "SPI device /dev/spidev%d.%d created", 
-                      bus, ch341_spi_devices[i].chip_select);
+                      ch341_dev->master->bus_num, ch341_spi_devices[i].chip_select);
             ch341_spi_set_cs (ch341_dev->slaves[i], false);
         }
     }
