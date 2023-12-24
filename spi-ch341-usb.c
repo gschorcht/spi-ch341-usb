@@ -47,7 +47,11 @@
 #include <linux/slab.h>
 #include <linux/usb.h>
 #include <linux/spi/spi.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,4,0)
+#include <linux/gpio.h>
+#else
 #include <linux/gpio/driver.h>
+#endif
 #include <linux/irq.h>
 
 /** 
