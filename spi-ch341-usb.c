@@ -47,11 +47,11 @@
 #include <linux/slab.h>
 #include <linux/usb.h>
 #include <linux/spi/spi.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,4,0)
-#include <linux/gpio.h>
-#else
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,4,0)
 #include <linux/gpio/driver.h>
+#include <linux/gpio/consumer.h>
 #endif
+#include <linux/gpio.h>
 #include <linux/irq.h>
 
 /** 
@@ -1271,7 +1271,7 @@ static int ch341_gpio_probe (struct ch341_device* ch341_dev)
                 ch341_dev->gpio_num = j ? j-1 : 0;
                 return result;
             }
-            if ((result = gpio_export (gpio->base + j, ch341_board_config[i].pin != 21 ? true : false)) != 0)
+            if ((result = gpiod_export (gpio_to_desc(gpio->base + j), ch341_board_config[i].pin != 21 ? true : false)) != 0)
             {
                 DEV_ERR (CH341_IF_ADDR, "failed to export GPIO %s: %d", 
                          ch341_board_config[i].name, result);
@@ -1305,7 +1305,7 @@ static void ch341_gpio_remove (struct ch341_device* ch341_dev)
 
         for (i = 0; i < ch341_dev->gpio_num; ++i)
         {
-           gpio_unexport(ch341_dev->gpio.base + i);
+           gpiod_unexport(gpio_to_desc(ch341_dev->gpio.base + i));
            gpio_free(ch341_dev->gpio.base + i);
         }
         #endif
