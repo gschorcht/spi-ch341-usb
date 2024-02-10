@@ -1,0 +1,2 @@
+ACTION=="add|change", SUBSYSTEM=="spi", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="5512", \
+    ATTR{driver_override}="spidev", ATTR{subsystem/drivers/spidev/bind}="$kernel"

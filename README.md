@@ -215,6 +215,16 @@ Once the driver is loaded successfully, it provides up to three SPI slave device
 
 according to the naming scheme ```/dev/spidev<bus>.<cs>```. ```<bus>``` is the bus number selected automatically by the driver and ```<cs>``` is the chip select signal of the according pin. Please note that independent on how many pins are configured as chip select signals, pin 15 gives always 0, pin 16 gives always 1, and pin 17 gives always 2 as chip select signal.
 
+Since linux-5.15 binding to spidev driver is required to make slave devices available via /dev/, e.g. for slave 1 on bus 0:
+```
+# echo spidev > /sys/class/spi_master/spi0/spi0.1/driver_override
+# echo spi0.1 > /sys/bus/spi/drivers/spidev/bind
+```
+For all devices handled by spi_ch341_usb driver:
+```
+# for i in /sys/bus/usb/drivers/spi-ch341-usb/*/spi_master/spi*/spi*.*; do echo spidev > $i/driver_override; echo $(basename $i) > /sys/bus/spi/drivers/spidev/bind; done
+```
+
 Standard I/O functions like ```open```, ```ioctl``` and ```close``` can be used to communicate with one of the slaves connected to the SPI.
 
 To open an SPI device simply use:
@@ -251,9 +261,21 @@ int status = ioctl (spi, SPI_IOC_MESSAGE(1), &spi_trans);
 // use input data in miso
 ```
 
+### Attaching SPI NOR flash as MTD
+
+E.g. flash IC is attached to bus 0 chip 0 (spi0.0):
+
+```
+# echo spi0.0 > /sys/bus/spi/drivers/spidev/unbind
+# echo spi-nor > /sys/bus/spi/devices/spi0.0/driver_override
+# echo spi0.0 > /sys/bus/spi/drivers/spi-nor/bind
+```
+
 ### Using GPIOs
 
-To access GPIOs from user space, ```sysfs``` can be used . For each configured GPIO, a directory 
+On systems with GPIO character device support (CONFIG_GPIO_CDEV) GPIO pins are available via ```/dev/gpiochipN``` character device.
+
+On systems with GPIO sysfs interface enabled (CONFIG_GPIO_SYSFS) to access GPIOs from user space, ```sysfs``` can be used . For each configured GPIO, a directory 
 ```
 /sys/class/gpio/<gpio>/
 ```
