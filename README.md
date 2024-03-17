@@ -1,3 +1,8 @@
+# Disclaimer
+I drop support for kernels older than [Arch Linux core version](https://archlinux.org/packages/core/x86_64/linux/).
+If you are looking for a driver with older kernels support, please take a look at this repository: [https://github.com/frank-zago/ch341-i2c-spi-gpio](https://github.com/frank-zago/ch341-i2c-spi-gpio).  
+-- dimich
+
 # CH341A USB to SPI and GPIO Linux kernel driver
 
 The driver can be used with CH341A USB to UART/I2C/SPI adapter boards to connect SPI slaves to a Linux host. It uses either the **fast SPI hardware interface** which is, however, limited to SPI mode 0 **or** a **slow SPI bit banging implementation**.

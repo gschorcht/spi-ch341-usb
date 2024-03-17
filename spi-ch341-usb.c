@@ -399,20 +399,22 @@ static void ch341_spi_update_io_data(struct ch341_device *ch341_dev)
 static void ch341_spi_set_cs(struct spi_device *spi, bool active)
 {
     struct ch341_device *ch341_dev = ch341_spi_maser_to_dev(spi->master);
+    uint8_t chipselect;
 
     if (spi->mode & SPI_NO_CS)
         return;
 
-    if (spi->chip_select > CH341_SPI_MAX_NUM_DEVICES)
+    chipselect = spi_get_chipselect(spi, 0);
+    if (chipselect > CH341_SPI_MAX_NUM_DEVICES)
     {
-        DEV_ERR (CH341_IF_ADDR, "invalid CS value %d, 0~%d are available", 
-                 spi->chip_select, CH341_SPI_MAX_NUM_DEVICES-1);
+        DEV_ERR (CH341_IF_ADDR, "invalid CS value %d, 0~%d are available",
+                 chipselect, CH341_SPI_MAX_NUM_DEVICES-1);
     }
 
     if (active)
-        ch341_dev->gpio_io_data &= ~(1 << spi->chip_select);
+        ch341_dev->gpio_io_data &= ~(1 << chipselect);
     else
-        ch341_dev->gpio_io_data |= (1 << spi->chip_select);
+        ch341_dev->gpio_io_data |= (1 << chipselect);
 
     ch341_spi_update_io_data(ch341_dev);
 }
@@ -644,7 +646,7 @@ out:
 static int ch341_spi_setup(struct spi_device *spi)
 {
     struct ch341_device* ch341_dev = ch341_spi_maser_to_dev(spi->controller);
-    uint8_t cs_mask = (1 << spi->chip_select);
+    uint8_t cs_mask = (1 << spi_get_chipselect(spi, 0));
 
     mutex_lock(&ch341_dev->mtx);
 
@@ -750,7 +752,7 @@ static void ch341_spi_remove (struct ch341_device* ch341_dev)
 
 // ----- irq layer begin -------------------------------------------------
 
-void ch341_irq_enable_disable (struct irq_data *data, bool enable)
+static void ch341_irq_enable_disable (struct irq_data *data, bool enable)
 {    
     struct ch341_device *ch341_dev;
     int irq;
@@ -770,17 +772,17 @@ void ch341_irq_enable_disable (struct irq_data *data, bool enable)
               data->irq, ch341_dev->irq_enabled[irq] ? 1 : 0);
 }
 
-void ch341_irq_enable (struct irq_data *data)
+static void ch341_irq_enable (struct irq_data *data)
 {
     ch341_irq_enable_disable (data, true);
 }
 
-void ch341_irq_disable (struct irq_data *data)
+static void ch341_irq_disable (struct irq_data *data)
 {
     ch341_irq_enable_disable (data, false);
 }
 
-int ch341_irq_set_type (struct irq_data *data, unsigned int type)
+static int ch341_irq_set_type (struct irq_data *data, unsigned int type)
 {
     struct ch341_device *ch341_dev;
     int irq;
@@ -897,7 +899,7 @@ static void ch341_irq_remove (struct ch341_device* ch341_dev)
 
 // ----- gpio layer begin ------------------------------------------------
 
-void ch341_gpio_read_inputs (struct ch341_device* ch341_dev)
+static void ch341_gpio_read_inputs (struct ch341_device* ch341_dev)
 {
     uint8_t old_io_data;
     uint8_t old_value;
@@ -1008,7 +1010,7 @@ static int ch341_gpio_poll_function (void* argument)
     return 0;
 }
 
-int ch341_gpio_get (struct gpio_chip *chip, unsigned offset)
+static int ch341_gpio_get (struct gpio_chip *chip, unsigned offset)
 {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
     struct ch341_device* ch341_dev = (struct ch341_device*)gpiochip_get_data(chip);
@@ -1029,7 +1031,7 @@ int ch341_gpio_get (struct gpio_chip *chip, unsigned offset)
 }
 
 // FIXME: not tested at the moment (will be introduced with kernel 4.15.0)
-int ch341_gpio_get_multiple (struct gpio_chip *chip, 
+static int ch341_gpio_get_multiple (struct gpio_chip *chip, 
                              unsigned long *mask, unsigned long *bits)
 {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
@@ -1056,7 +1058,7 @@ int ch341_gpio_get_multiple (struct gpio_chip *chip,
     return CH341_OK;
 }
 
-void ch341_gpio_set (struct gpio_chip *chip, unsigned offset, int value)
+static void ch341_gpio_set (struct gpio_chip *chip, unsigned offset, int value)
 {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
     struct ch341_device* ch341_dev = (struct ch341_device*)gpiochip_get_data(chip);
@@ -1078,7 +1080,7 @@ void ch341_gpio_set (struct gpio_chip *chip, unsigned offset, int value)
     ch341_spi_write_outputs (ch341_dev);
 }
 
-void ch341_gpio_set_multiple (struct gpio_chip *chip, 
+static void ch341_gpio_set_multiple (struct gpio_chip *chip, 
                               unsigned long *mask, unsigned long *bits)
 {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
@@ -1110,7 +1112,7 @@ void ch341_gpio_set_multiple (struct gpio_chip *chip,
 }
 
 
-int ch341_gpio_get_direction (struct gpio_chip *chip, unsigned offset)
+static int ch341_gpio_get_direction (struct gpio_chip *chip, unsigned offset)
 {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
     struct ch341_device* ch341_dev = (struct ch341_device*)gpiochip_get_data(chip);
@@ -1129,7 +1131,7 @@ int ch341_gpio_get_direction (struct gpio_chip *chip, unsigned offset)
     return mode;
 }
 
-int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool input)
+static int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool input)
 {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
     struct ch341_device* ch341_dev = (struct ch341_device*)gpiochip_get_data(chip);
@@ -1160,12 +1162,12 @@ int ch341_gpio_set_direction (struct gpio_chip *chip, unsigned offset, bool inpu
     return CH341_OK;
 }
 
-int ch341_gpio_direction_input (struct gpio_chip *chip, unsigned offset)
+static int ch341_gpio_direction_input (struct gpio_chip *chip, unsigned offset)
 {
     return ch341_gpio_set_direction (chip, offset, true);
 }
 
-int ch341_gpio_direction_output (struct gpio_chip *chip, unsigned offset, int value)
+static int ch341_gpio_direction_output (struct gpio_chip *chip, unsigned offset, int value)
 {
     int result = CH341_OK;
 
@@ -1176,7 +1178,7 @@ int ch341_gpio_direction_output (struct gpio_chip *chip, unsigned offset, int va
     return result;
 }
 
-int ch341_gpio_to_irq (struct gpio_chip *chip, unsigned offset)
+static int ch341_gpio_to_irq (struct gpio_chip *chip, unsigned offset)
 {
     #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
     struct ch341_device* ch341_dev = (struct ch341_device*)gpiochip_get_data(chip);
